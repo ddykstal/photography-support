@@ -4,9 +4,9 @@ Lightroom Classic Backups retention script.
 
 Keeps:
 - Latest backup per day (collapsing multiple runs per day)
-- Last 7 daily backups (7 most recent backup-days)
-- Last 4 weekly backups (latest backup in a week among older daily backups; may skip weeks)
-- Last 3 monthly backups (latest backup in a month among older daily backups; may skip months)
+- Last 5 daily backups (5 most recent backup-days)
+- Last 0 weekly backups (disabled by default)
+- Last 0 monthly backups (disabled by default)
 
 Default: dry-run (prints what it would delete).
 Use --apply to actually delete.
@@ -142,9 +142,9 @@ def main() -> int:
         default=DEFAULT_BACKUPS_ROOT,
         help=f"Path to Lightroom 'Backups' folder (default: {DEFAULT_BACKUPS_ROOT})",
     )
-    ap.add_argument("--keep-days", type=int, default=7, help="Number of daily backups to keep (default: 7)")
-    ap.add_argument("--keep-weeks", type=int, default=4, help="Number of weekly backups to keep (default: 4)")
-    ap.add_argument("--keep-months", type=int, default=3, help="Number of monthly backups to keep (default: 3)")
+    ap.add_argument("--keep-days", type=int, default=5, help="Number of daily backups to keep (default: 5)")
+    ap.add_argument("--keep-weeks", type=int, default=0, help="Number of weekly backups to keep (default: 0)")
+    ap.add_argument("--keep-months", type=int, default=0, help="Number of monthly backups to keep (default: 0)")
     ap.add_argument("--apply", action="store_true", help="Actually delete; otherwise dry-run")
     args = ap.parse_args()
 
