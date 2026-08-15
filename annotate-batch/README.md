@@ -7,6 +7,7 @@ Simple web wrapper around `annotate-border.py` for batch upload + view/download.
 - Drag-and-drop JPEG upload (`.jpg`, `.jpeg`)
 - Annotates each upload using your existing profile/template system
 - Lists annotated files with view/download links
+- Lightweight per-browser-session isolation (files are separated by session)
 
 ## Layout
 
@@ -20,15 +21,30 @@ Simple web wrapper around `annotate-border.py` for batch upload + view/download.
 
 ## Local run
 
-From project root:
+From `annotate-batch/`:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -r annotate-batch/requirements.txt
-.venv/bin/python annotate-batch/app.py
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python app.py
 ```
 
 Then open: `http://127.0.0.1:5050`
+
+## Session isolation
+
+Each browser session gets its own upload/output subdirectories under:
+
+- `annotate-batch/uploads/<session_id>/`
+- `annotate-batch/annotated/<session_id>/`
+
+So users no longer see each other's file lists or downloads by default.
+
+Set a stable secret in production (required for consistent session cookies across restarts/workers):
+
+```bash
+ANNOTATE_SESSION_SECRET='replace-with-a-long-random-secret' .venv/bin/gunicorn wsgi:application --bind localhost:5050
+```
 
 ## Profile selection
 
@@ -67,9 +83,9 @@ sudo apt install -y apache2 libapache2-mod-wsgi-py3 python3-venv certbot python3
 2) Create app venv + install deps:
 
 ```bash
-cd /srv/photography-support
+cd /srv/photography-support/annotate-batch
 python3 -m venv .venv
-.venv/bin/python -m pip install -r annotate-batch/requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 3) Enable required Apache modules:

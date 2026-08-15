@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, abort, jsonify, render_template, request, send_from_directory, session
 from werkzeug.utils import secure_filename
 
 
@@ -20,6 +20,8 @@ ANNOTATED_DIR = APP_DIR / "annotated"
 ANNOTATE_SCRIPT = BIN_DIR / "annotate-border.py"
 DEFAULT_PROFILE = BIN_DIR / "profiles" / "annotation-screen-footer.annotate"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg"}
+SESSION_COOKIE_KEY = "annotate_batch_session_id"
+DEFAULT_SESSION_SECRET = "annotate-batch-dev-secret-change-me"
 
 
 def load_annotator_module(script_path: Path) -> Any:
@@ -51,9 +53,31 @@ def uniquify_filename(base_name: str) -> str:
     return f"{safe_stem}-{stamp}-{token}{ext}"
 
 
-def list_annotated_files() -> list[dict[str, Any]]:
+def current_session_id() -> str:
+    session_id = session.get(SESSION_COOKIE_KEY, "")
+    if isinstance(session_id, str) and session_id:
+        return session_id
+
+    new_session_id = secrets.token_hex(16)
+    session[SESSION_COOKIE_KEY] = new_session_id
+    return new_session_id
+
+
+def session_upload_dir() -> Path:
+    path = UPLOAD_DIR / current_session_id()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def session_annotated_dir() -> Path:
+    path = ANNOTATED_DIR / current_session_id()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def list_annotated_files(directory: Path) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    for path in sorted(ANNOTATED_DIR.glob("*.jpg")):
+    for path in sorted(directory.glob("*.jpg")):
         stat = path.stat()
         items.append(
             {
@@ -69,6 +93,7 @@ def list_annotated_files() -> list[dict[str, Any]]:
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.secret_key = os.environ.get("ANNOTATE_SESSION_SECRET", DEFAULT_SESSION_SECRET)
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     ANNOTATED_DIR.mkdir(parents=True, exist_ok=True)
@@ -77,11 +102,11 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index() -> str:
-        return render_template("index.html", files=list_annotated_files())
+        return render_template("index.html", files=list_annotated_files(session_annotated_dir()))
 
     @app.get("/api/files")
     def api_files() -> Any:
-        return jsonify({"files": list_annotated_files()})
+        return jsonify({"files": list_annotated_files(session_annotated_dir())})
 
     @app.post("/upload")
     def upload() -> Any:
@@ -97,6 +122,9 @@ def create_app() -> Flask:
             profile = annotator.load_profile(profile_path)
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"Could not load profile: {exc}"}), 500
+
+        upload_dir = session_upload_dir()
+        annotated_dir = session_annotated_dir()
 
         results: list[dict[str, str]] = []
 
@@ -116,9 +144,9 @@ def create_app() -> Flask:
                 continue
 
             upload_name = uniquify_filename(original_name)
-            upload_path = UPLOAD_DIR / upload_name
+            upload_path = upload_dir / upload_name
             output_name = f"{Path(upload_name).stem}.annotated.jpg"
-            output_path = ANNOTATED_DIR / output_name
+            output_path = annotated_dir / output_name
 
             try:
                 file_storage.save(upload_path)
@@ -144,17 +172,23 @@ def create_app() -> Flask:
             {
                 "profile": str(profile_path),
                 "results": results,
-                "files": list_annotated_files(),
+                "files": list_annotated_files(annotated_dir),
             }
         )
 
     @app.get("/files/<path:filename>")
     def view_file(filename: str) -> Any:
-        return send_from_directory(ANNOTATED_DIR, filename, as_attachment=False)
+        annotated_dir = session_annotated_dir()
+        if not (annotated_dir / filename).is_file():
+            abort(404)
+        return send_from_directory(annotated_dir, filename, as_attachment=False)
 
     @app.get("/download/<path:filename>")
     def download_file(filename: str) -> Any:
-        return send_from_directory(ANNOTATED_DIR, filename, as_attachment=True)
+        annotated_dir = session_annotated_dir()
+        if not (annotated_dir / filename).is_file():
+            abort(404)
+        return send_from_directory(annotated_dir, filename, as_attachment=True)
 
     return app
 
