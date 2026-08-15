@@ -1,0 +1,22 @@
+# Snapshot-style profile
+@layout screen-footer
+@aspect-ratio 16:9
+@pixel-width 1920
+@font-family American Typewriter, Courier New, Menlo, Monaco, Monospace
+@font-weight bold
+
+@render-dpi 300
+@font-size-adjust 0.80
+@line-spacing-ratio 0.30
+@border-lines 1.0
+@vertical-padding-lines 0.45
+@horizontal-padding-ratio 0.03
+@background-color #FFFFFF
+@text-color #3B2F2A
+@justify center
+
+# Render lines
+$title
+$caption  @wrap 0.92  @scale 0.70
+$camera   ISO $iso   f/$aperture   $shutter-speed   $focal-length
+$copyright $license  @scale 0.70

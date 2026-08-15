@@ -1,0 +1,146 @@
+# annotate-batch (bare bones web UI)
+
+Simple web wrapper around `annotate-border.py` for batch upload + view/download.
+
+## Features
+
+- Drag-and-drop JPEG upload (`.jpg`, `.jpeg`)
+- Annotates each upload using your existing profile/template system
+- Lists annotated files with view/download links
+
+## Layout
+
+- `app.py` - Flask app
+- `uploads/` - stored uploaded source files
+- `annotated/` - rendered output files
+- `templates/index.html` - minimal UI
+- `static/` - CSS + JS
+- `bin/annotate-border.py` - annotation engine used by web app
+- `bin/profiles/*.annotate` - profile templates used by web app
+
+## Local run
+
+From project root:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r annotate-batch/requirements.txt
+.venv/bin/python annotate-batch/app.py
+```
+
+Then open: `http://127.0.0.1:5050`
+
+## Profile selection
+
+Default profile:
+
+- `annotate-batch/bin/profiles/annotation-screen-footer.annotate`
+
+Override via environment variable:
+
+```bash
+ANNOTATE_PROFILE=/absolute/path/to/profile.annotate .venv/bin/python annotate-batch/app.py
+```
+
+## Apache/MAMP notes
+
+This app is WSGI-compatible as `application` in `annotate-batch/wsgi.py`.
+
+- For Apache on Debian, use `mod_wsgi` and point to `annotate-batch/wsgi.py`.
+- In MAMP Pro, either proxy to a Python process or use a WSGI setup depending on your stack.
+
+You said you'll provide server definitions, so this repo keeps only app code and runtime folders.
+
+## Debian/Linode quick checklist (Apache + mod_wsgi + HTTPS)
+
+Assume project path:
+
+- `/srv/photography-support`
+
+1) Install packages:
+
+```bash
+sudo apt update
+sudo apt install -y apache2 libapache2-mod-wsgi-py3 python3-venv certbot python3-certbot-apache
+```
+
+2) Create app venv + install deps:
+
+```bash
+cd /srv/photography-support
+python3 -m venv .venv
+.venv/bin/python -m pip install -r annotate-batch/requirements.txt
+```
+
+3) Enable required Apache modules:
+
+```bash
+sudo a2enmod wsgi ssl headers rewrite
+```
+
+4) Install site config:
+
+- Start from `annotate-batch/apache-vhost-https-example.conf`
+- Replace placeholders:
+  - `blindingmoon.net`
+  - `/ABS/PATH/TO/photography-support`
+
+Then copy to Apache sites dir (example name):
+
+```bash
+sudo cp annotate-batch/apache-vhost-https-example.conf /etc/apache2/sites-available/annotate-batch.conf
+```
+
+5) Enable site + disable default (optional):
+
+```bash
+sudo a2ensite annotate-batch.conf
+sudo a2dissite 000-default.conf
+```
+
+6) Create/verify writable runtime dirs for Apache user (`www-data`):
+
+```bash
+sudo mkdir -p /srv/photography-support/annotate-batch/uploads
+sudo mkdir -p /srv/photography-support/annotate-batch/annotated
+sudo chown -R www-data:www-data /srv/photography-support/annotate-batch/uploads /srv/photography-support/annotate-batch/annotated
+```
+
+7) Check Apache config + reload:
+
+```bash
+sudo apache2ctl configtest
+sudo systemctl reload apache2
+```
+
+8) Issue TLS cert (Let's Encrypt):
+
+```bash
+sudo certbot --apache -d blindingmoon.net
+```
+
+9) Reload after certbot updates vhost:
+
+```bash
+sudo apache2ctl configtest
+sudo systemctl reload apache2
+```
+
+10) Verify:
+
+```bash
+curl -I http://blindingmoon.net
+curl -I https://blindingmoon.net
+```
+
+Expected:
+- HTTP returns `301` redirect to HTTPS
+- HTTPS returns `200` on `/`
+
+### Optional profile override in Apache
+
+Inside your vhost, set a specific annotation profile:
+
+```apache
+WSGISetEnv ANNOTATE_PROFILE /srv/photography-support/annotate-batch/bin/profiles/annotation-snapshot.annotate
+```

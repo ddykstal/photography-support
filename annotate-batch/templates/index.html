@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Annotate Batch</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main>
+      <h1>Annotate Batch</h1>
+      <p class="subtle">Drop JPEGs here to annotate. Processed files appear below for view/download.</p>
+
+      <section id="dropzone" class="dropzone" aria-label="File upload drop zone">
+        <p>Drop files here or</p>
+        <label class="button" for="fileInput">Choose Files</label>
+        <input id="fileInput" type="file" accept=".jpg,.jpeg,image/jpeg" multiple />
+      </section>
+
+      <section id="status" class="status" aria-live="polite"></section>
+
+      <section>
+        <h2>Annotated Files</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Filename</th>
+              <th>Modified (UTC)</th>
+              <th>Size</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="filesBody">
+            {% for file in files %}
+            <tr>
+              <td>{{ file.filename }}</td>
+              <td>{{ file.modified }}</td>
+              <td>{{ file.size_bytes }}</td>
+              <td>
+                <a href="{{ url_for('view_file', filename=file.filename) }}" target="_blank" rel="noopener">view</a>
+                |
+                <a href="{{ url_for('download_file', filename=file.filename) }}">download</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

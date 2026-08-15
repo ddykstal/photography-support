@@ -1,0 +1,73 @@
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  margin: 0;
+  background: #f8f9fa;
+  color: #222;
+}
+
+main {
+  max-width: 980px;
+  margin: 2rem auto;
+  background: #fff;
+  padding: 1.25rem 1.5rem 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+h1, h2 {
+  margin-top: 0;
+}
+
+.subtle {
+  color: #555;
+}
+
+.dropzone {
+  border: 2px dashed #7e8a94;
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+  margin: 1rem 0;
+  background: #fafcff;
+}
+
+.dropzone.dragover {
+  border-color: #2b6cb0;
+  background: #edf2ff;
+}
+
+.button {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  background: #2b6cb0;
+  color: #fff;
+  cursor: pointer;
+}
+
+#fileInput {
+  display: none;
+}
+
+.status {
+  min-height: 1.2rem;
+  margin: 0.5rem 0 1rem;
+  font-size: 0.95rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  border-bottom: 1px solid #ddd;
+  padding: 0.45rem;
+  text-align: left;
+  font-size: 0.95rem;
+}
+
+th {
+  background: #f2f4f7;
+}

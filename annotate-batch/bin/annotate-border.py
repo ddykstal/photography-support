@@ -12,13 +12,9 @@ from typing import Any
 
 
 VAR_RE = re.compile(r"\$([A-Za-z0-9_-]+)")
-SCREEN_RESOLUTION_PRESETS: dict[str, list[tuple[int, int]]] = {
-    "16:9": [(1920, 1080), (3840, 2160)],
-    "4:3": [(1600, 1200), (3200, 2400)],
-    "3:2": [(3000, 2000), (6000, 4000)],
-}
+OPTIONAL_SEGMENT_RE = re.compile(r"\[([^\[\]]*)\]")
 
-# Base text sizes (pixels) for screen-footer outputs by exact resolution.
+# Base text sizes (pixels) for known output resolutions.
 SCREEN_FONT_SIZE_PRESETS: dict[tuple[int, int], int] = {
     (1600, 1200): 28,
     (1920, 1080): 30,
@@ -230,7 +226,20 @@ def substitute_vars(template: str, metadata: dict[str, str], missing_value: str)
         value = metadata.get(key, "")
         return value if value else missing_value
 
-    return VAR_RE.sub(repl, template).strip()
+    def repl_optional(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        vars_in_inner = [normalize_key(name) for name in VAR_RE.findall(inner)]
+
+        # Optional block renders only when all referenced variables are present.
+        if vars_in_inner and any(not metadata.get(key, "").strip() for key in vars_in_inner):
+            return ""
+
+        return VAR_RE.sub(repl, inner)
+
+    text = OPTIONAL_SEGMENT_RE.sub(repl_optional, template)
+    text = VAR_RE.sub(repl, text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text.strip()
 
 
 def line_has_render_content(text: str) -> bool:
@@ -265,7 +274,7 @@ def expand_family_aliases(family: str) -> list[str]:
     return aliases if aliases else [family]
 
 
-def find_font_path_from_families(font_families: list[str]) -> Path | None:
+def find_font_path_from_families(font_families: list[str], font_weight: str = "normal") -> Path | None:
     font_dirs = [
         Path("/System/Library/Fonts"),
         Path("/Library/Fonts"),
@@ -286,8 +295,19 @@ def find_font_path_from_families(font_families: list[str]) -> Path | None:
     for family in font_families:
         expanded_families.extend(expand_family_aliases(family))
 
+    bold_requested = normalize_key(font_weight) == "bold"
+
     for family in expanded_families:
         token = normalize_font_token(family)
+
+        if bold_requested:
+            for path, stem in indexed:
+                if stem == token and ("bold" in stem or "demi" in stem or "black" in stem):
+                    return path
+            for path, stem in indexed:
+                if token and token in stem and ("bold" in stem or "demi" in stem or "black" in stem):
+                    return path
+
         for path, stem in indexed:
             if stem == token:
                 return path
@@ -297,13 +317,18 @@ def find_font_path_from_families(font_families: list[str]) -> Path | None:
     return None
 
 
-def load_font(font_size: int, font_path: str | None, font_families: list[str]) -> Any:
+def load_font(
+    font_size: int,
+    font_path: str | None,
+    font_families: list[str],
+    font_weight: str = "normal",
+) -> Any:
     image_font = importlib.import_module("PIL.ImageFont")
 
     if font_path:
         return image_font.truetype(font_path, font_size)
 
-    resolved = find_font_path_from_families(font_families)
+    resolved = find_font_path_from_families(font_families, font_weight)
     if resolved is None:
         raise RuntimeError(
             "Could not resolve a TrueType/OpenType font from font-family list: "
@@ -334,7 +359,7 @@ def wrap_text_to_width(draw_obj: Any, text: str, font_obj: Any, max_width: int) 
     return wrapped
 
 
-def parse_aspect_ratio(value: str) -> str:
+def parse_aspect_ratio(value: str) -> tuple[int, int]:
     text = value.strip()
     match = re.fullmatch(r"(\d+)\s*:\s*(\d+)", text)
     if not match:
@@ -346,12 +371,55 @@ def parse_aspect_ratio(value: str) -> str:
         raise ValueError("aspect-ratio values must be positive")
 
     g = math.gcd(w, h)
-    return f"{w // g}:{h // g}"
+    return w // g, h // g
 
 
-def build_output_path_for_resolution(base_output: Path, width: int, height: int) -> Path:
-    suffix = base_output.suffix if base_output.suffix else ".jpg"
-    return base_output.with_name(f"{base_output.stem}.{width}x{height}{suffix}")
+def parse_positive_int(value: Any, label: str) -> int:
+    try:
+        out = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} must be a positive integer") from None
+    if out <= 0:
+        raise ValueError(f"{label} must be a positive integer")
+    return out
+
+
+def resolve_screen_target_resolution(border: dict[str, Any]) -> tuple[int, int]:
+    aspect_raw = border.get("aspect-ratio", border.get("aspect_ratio"))
+    pixel_width_raw = border.get("pixel-width", border.get("pixel_width"))
+    pixel_height_raw = border.get("pixel-height", border.get("pixel_height"))
+
+    provided = sum(
+        value is not None and str(value).strip() != ""
+        for value in [aspect_raw, pixel_width_raw, pixel_height_raw]
+    )
+    if provided != 2:
+        raise ValueError(
+            "screen-footer requires exactly two of: aspect-ratio, pixel-width, pixel-height"
+        )
+
+    aspect: tuple[int, int] | None = None
+    pixel_width: int | None = None
+    pixel_height: int | None = None
+
+    if aspect_raw is not None and str(aspect_raw).strip() != "":
+        aspect = parse_aspect_ratio(str(aspect_raw))
+    if pixel_width_raw is not None and str(pixel_width_raw).strip() != "":
+        pixel_width = parse_positive_int(pixel_width_raw, "pixel-width")
+    if pixel_height_raw is not None and str(pixel_height_raw).strip() != "":
+        pixel_height = parse_positive_int(pixel_height_raw, "pixel-height")
+
+    if aspect and pixel_width is not None and pixel_height is None:
+        pixel_height = max(1, round(pixel_width * aspect[1] / aspect[0]))
+    elif aspect and pixel_height is not None and pixel_width is None:
+        pixel_width = max(1, round(pixel_height * aspect[0] / aspect[1]))
+
+    if pixel_width is None or pixel_height is None:
+        raise ValueError(
+            "could not resolve screen target resolution; check aspect-ratio/pixel-width/pixel-height"
+        )
+
+    return pixel_width, pixel_height
 
 
 def screen_font_size_for_resolution(width: int, height: int, adjust: float = 1.0) -> int:
@@ -392,6 +460,9 @@ def build_render_segments(
     font_path = border.get("font-path", border.get("font_path"))
     font_family_value = border.get("font-family", border.get("font_family", "Arial, Sans-Serif"))
     font_families = parse_font_family_list(font_family_value)
+    font_weight = str(border.get("font-weight", border.get("font_weight", "normal"))).strip().lower()
+    if font_weight not in {"normal", "bold"}:
+        raise ValueError("font-weight must be one of: normal, bold")
     if not font_families and not font_path:
         font_families = ["Arial", "Sans-Serif"]
 
@@ -399,7 +470,12 @@ def build_render_segments(
     usable_width = max(20, content_width - (2 * horizontal_padding))
 
     probe_size = 100
-    probe_font = load_font(probe_size, str(font_path) if font_path else None, font_families)
+    probe_font = load_font(
+        probe_size,
+        str(font_path) if font_path else None,
+        font_families,
+        font_weight=font_weight,
+    )
     dummy = image_mod.new("RGB", (max(40, content_width), 20), color="#FFFFFF")
     draw_dummy = image_draw_mod.Draw(dummy)
     n_bbox = draw_dummy.textbbox((0, 0), "n", font=probe_font)
@@ -432,7 +508,12 @@ def build_render_segments(
 
         scale = parse_float(spec.get("scale"), 1.0)
         font_size = max(8, round(base_font_size * scale))
-        font = load_font(font_size, str(font_path) if font_path else None, font_families)
+        font = load_font(
+            font_size,
+            str(font_path) if font_path else None,
+            font_families,
+            font_weight=font_weight,
+        )
 
         bbox_n = draw_dummy.textbbox((0, 0), "Ag", font=font)
         this_line_height = max(1, bbox_n[3] - bbox_n[1])
@@ -589,97 +670,94 @@ def annotate_image(input_path: Path, output_path: Path, profile: dict[str, Any])
         written.append(output_path)
         return written
 
-    # screen-footer mode: fixed output resolutions by aspect-ratio preset.
-    aspect_text = str(border.get("aspect-ratio", border.get("aspect_ratio", "16:9")))
-    aspect_key = parse_aspect_ratio(aspect_text)
-    resolutions = SCREEN_RESOLUTION_PRESETS.get(aspect_key)
-    if not resolutions:
-        supported = ", ".join(sorted(SCREEN_RESOLUTION_PRESETS.keys()))
-        raise ValueError(f"No screen resolution preset for aspect-ratio {aspect_key}. Supported: {supported}")
+    # screen-footer mode: single fixed output resolution derived from any two directives.
+    target_w, target_h = resolve_screen_target_resolution(border)
 
     font_size_adjust = parse_float(border.get("font-size-adjust", border.get("font_size_adjust")), 1.0)
     if font_size_adjust <= 0:
         raise ValueError("font-size-adjust must be > 0")
 
-    for target_w, target_h in resolutions:
-        base_font_size = screen_font_size_for_resolution(target_w, target_h, font_size_adjust)
+    base_font_size = screen_font_size_for_resolution(target_w, target_h, font_size_adjust)
 
-        # First pass estimate, then recompute with actual content width.
-        plan_first = build_render_segments(
-            image_mod,
-            image_draw_mod,
-            border,
-            line_specs,
-            metadata,
-            target_w,
-            missing_value,
-            base_font_size_override=base_font_size,
-        )
-        side_border = int(plan_first["border_thickness"])
-        top_border = int(plan_first["border_thickness"])
+    # First pass estimate, then recompute with actual content width.
+    plan_first = build_render_segments(
+        image_mod,
+        image_draw_mod,
+        border,
+        line_specs,
+        metadata,
+        target_w,
+        missing_value,
+        base_font_size_override=base_font_size,
+    )
+    side_border = int(plan_first["border_thickness"])
+    top_border = int(plan_first["border_thickness"])
 
-        content_w = max(40, target_w - (2 * side_border))
+    content_w = max(40, target_w - (2 * side_border))
 
-        render_plan = build_render_segments(
-            image_mod,
-            image_draw_mod,
-            border,
-            line_specs,
-            metadata,
-            content_w,
-            missing_value,
-            base_font_size_override=base_font_size,
-        )
-        side_border = int(render_plan["border_thickness"])
-        top_border = int(render_plan["border_thickness"])
-        content_w = max(40, target_w - (2 * side_border))
+    render_plan = build_render_segments(
+        image_mod,
+        image_draw_mod,
+        border,
+        line_specs,
+        metadata,
+        content_w,
+        missing_value,
+        base_font_size_override=base_font_size,
+    )
+    side_border = int(render_plan["border_thickness"])
+    top_border = int(render_plan["border_thickness"])
+    content_w = max(40, target_w - (2 * side_border))
 
-        footer_height = int(render_plan["footer_height"])
-        footer_vertical_padding = int(render_plan["footer_vertical_padding"])
+    footer_height = int(render_plan["footer_height"])
+    footer_vertical_padding = int(render_plan["footer_vertical_padding"])
 
-        image_frame_h = target_h - top_border - footer_height
-        image_frame_w = content_w
-        if image_frame_h <= 20 or image_frame_w <= 20:
-            raise ValueError(
-                f"Output resolution {target_w}x{target_h} is too small for current text/border settings"
-            )
-
-        scale = min(image_frame_w / width, image_frame_h / height)
-        draw_w = max(1, int(round(width * scale)))
-        draw_h = max(1, int(round(height * scale)))
-        resized = image.resize((draw_w, draw_h), resample=image_mod.Resampling.LANCZOS)
-
-        canvas = image_mod.new("RGB", (target_w, target_h), color=background_color)
-
-        frame_left = side_border
-        frame_top = top_border
-        paste_x = frame_left + (image_frame_w - draw_w) // 2
-        paste_y = frame_top + (image_frame_h - draw_h) // 2
-        canvas.paste(resized, (paste_x, paste_y))
-
-        draw = image_draw_mod.Draw(canvas)
-        y_start = target_h - footer_height + footer_vertical_padding
-        draw_segments(
-            draw,
-            render_plan["rendered_segments"],
-            align,
-            frame_left,
-            image_frame_w,
-            int(render_plan["horizontal_padding"]),
-            y_start,
-            int(render_plan["line_spacing"]),
-            text_color,
+    image_frame_h = target_h - top_border - footer_height
+    image_frame_w = content_w
+    if image_frame_h <= 20 or image_frame_w <= 20:
+        raise ValueError(
+            f"Output resolution {target_w}x{target_h} is too small for current text/border settings"
         )
 
-        output_for_size = build_output_path_for_resolution(output_path, target_w, target_h)
-        output_for_size.parent.mkdir(parents=True, exist_ok=True)
-        canvas.save(output_for_size, format="JPEG", quality=95)
-        written.append(output_for_size)
+    scale = min(image_frame_w / width, image_frame_h / height)
+    draw_w = max(1, int(round(width * scale)))
+    draw_h = max(1, int(round(height * scale)))
+    resized = image.resize((draw_w, draw_h), resample=image_mod.Resampling.LANCZOS)
+
+    canvas = image_mod.new("RGB", (target_w, target_h), color=background_color)
+
+    frame_left = side_border
+    frame_top = top_border
+    paste_x = frame_left + (image_frame_w - draw_w) // 2
+    paste_y = frame_top + (image_frame_h - draw_h) // 2
+    canvas.paste(resized, (paste_x, paste_y))
+
+    draw = image_draw_mod.Draw(canvas)
+    footer_top = paste_y + draw_h
+    y_start = footer_top + footer_vertical_padding
+    draw_segments(
+        draw,
+        render_plan["rendered_segments"],
+        align,
+        frame_left,
+        image_frame_w,
+        int(render_plan["horizontal_padding"]),
+        y_start,
+        int(render_plan["line_spacing"]),
+        text_color,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output_path, format="JPEG", quality=95)
+    written.append(output_path)
 
     return written
 
 
 def main() -> int:
+    script_dir = Path(__file__).resolve().parent
+    default_profile_path = script_dir / "profiles" / "annotation-screen-footer.annotate"
+
     parser = argparse.ArgumentParser(
         description=(
             "Create a Polaroid-style annotation border on a JPEG using Pillow. "
@@ -687,32 +765,35 @@ def main() -> int:
         ),
         epilog=(
             "Example:\n"
-            "  python3 annotate-border.py input.jpg output.jpg --profile ./profiles/annotation-screen-footer.annotate\n"
+            "  python3 annotate-batch/bin/annotate-border.py input.jpg output.jpg --profile annotate-batch/bin/profiles/annotation-screen-footer.annotate\n"
             "\n"
             "Template notes:\n"
             "  @layout image-footer|screen-footer\n"
             "  @aspect-ratio 16:9\n"
+            "  @pixel-width 1920\n"
+            "  @pixel-height 1080\n"
             "  @justify left|center|right\n"
+            "  @font-weight normal|bold\n"
+            "  optional inline segments: [-- $license]\n"
             "\n"
-            "In screen-footer mode, base font size is looked up by output resolution\n"
-            "(line-chars/min-font-points are mainly for image-footer tuning).\n"
+            "In screen-footer mode, provide exactly two of:\n"
+            "  aspect-ratio, pixel-width, pixel-height\n"
+            "The third value is derived automatically.\n"
+            "\n"
+            "Base font size is estimated from output height with optional presets.\n"
             "Optional: @font-size-adjust 0.95 (or 1.05) to nudge all screen sizes.\n"
-            "\n"
-            "screen-footer uses hard-coded resolution presets by aspect ratio:\n"
-            "  16:9 -> 1920x1080, 3840x2160\n"
-            "  4:3  -> 1600x1200, 3200x2400\n"
-            "  3:2  -> 3000x2000, 6000x4000\n"
+            "line-chars/min-font-points are mainly for image-footer tuning.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("input_image", help="Path to input JPEG image")
-    parser.add_argument("output_image", help="Path to output JPEG image (base name for screen-footer mode)")
+    parser.add_argument("output_image", help="Path to output JPEG image")
     parser.add_argument(
         "--profile",
-        default="profiles/annotation-screen-footer.annotate",
+        default=str(default_profile_path),
         help=(
             "Path to plain-text annotate template "
-            "(default: profiles/annotation-screen-footer.annotate)"
+            "(default: script-dir/profiles/annotation-screen-footer.annotate)"
         ),
     )
 
