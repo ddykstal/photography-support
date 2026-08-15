@@ -1,0 +1,21 @@
+# Global directives
+@layout screen-footer
+@aspect-ratio 16:9
+@font-family Arial, Sans-Serif
+
+@render-dpi 300
+@font-size-adjust 1.00
+@line-spacing-ratio 0.30
+@border-lines 1.0
+@vertical-padding-lines 0.45
+@horizontal-padding-ratio 0.03
+@background-color #FFFFFF
+@text-color #000000
+@justify center
+
+# Render lines
+$capture-date -- $title
+$caption  @wrap 0.92  @scale 0.92
+$camera, ISO $iso, f/$aperture, $shutter-speed
+$copyright
+$license
