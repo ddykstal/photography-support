@@ -435,7 +435,7 @@ def resolve_target_resolution(
     return pixel_width, pixel_height
 
 
-def resolve_projection_reference_resolution(border: dict[str, Any]) -> tuple[int, int] | None:
+def resolve_projection_reference_resolution(border: dict[str, Any]) -> tuple[int, int]:
     projection_aspect_raw = border.get("projection-aspect-ratio", border.get("projection_aspect_ratio"))
     projection_pixel_width_raw = border.get(
         "projection-pixel-width",
@@ -463,7 +463,29 @@ def resolve_projection_reference_resolution(border: dict[str, Any]) -> tuple[int
             "projection-aspect-ratio, projection-pixel-width, projection-pixel-height"
         )
 
-    return None
+    # Backward-compatible fallback to non-prefixed keys.
+    aspect_raw = border.get("aspect-ratio", border.get("aspect_ratio"))
+    pixel_width_raw = border.get("pixel-width", border.get("pixel_width"))
+    pixel_height_raw = border.get("pixel-height", border.get("pixel_height"))
+    unprefixed_provided = sum(
+        value is not None and str(value).strip() != ""
+        for value in [aspect_raw, pixel_width_raw, pixel_height_raw]
+    )
+    if unprefixed_provided == 2:
+        return resolve_target_resolution(
+            aspect_raw,
+            pixel_width_raw,
+            pixel_height_raw,
+            context_label="projection reference",
+        )
+    if unprefixed_provided != 0:
+        raise ValueError(
+            "projection reference requires exactly two of: "
+            "aspect-ratio, pixel-width, pixel-height"
+        )
+
+    # Default projector/display reference for consistent apparent typography.
+    return (1920, 1080)
 
 
 def reference_font_size_for_resolution(width: int, height: int, adjust: float = 1.0) -> int:
@@ -472,6 +494,61 @@ def reference_font_size_for_resolution(width: int, height: int, adjust: float = 
         size = max(12, round(height * 0.028))
     adjusted = round(size * adjust)
     return max(8, adjusted)
+
+
+def estimate_image_footer_canvas_size(image_width: int, image_height: int, render_plan: dict[str, Any]) -> tuple[int, int]:
+    side_border = int(render_plan["border_thickness"])
+    top_border = int(render_plan["border_thickness"])
+    footer_height = int(render_plan["footer_height"])
+    canvas_width = image_width + (2 * side_border)
+    canvas_height = top_border + image_height + footer_height
+    return canvas_width, canvas_height
+
+
+def compute_projection_consistent_base_font_size(
+    image_mod: Any,
+    image_draw_mod: Any,
+    border: dict[str, Any],
+    line_specs: list[dict[str, Any]],
+    metadata: dict[str, str],
+    image_width: int,
+    image_height: int,
+    missing_value: str,
+    projection_width: int,
+    projection_height: int,
+    reference_font_px: int,
+) -> int:
+    # Initial estimate from fitting the source image bounds alone.
+    guess = max(8, round(reference_font_px * max(image_width / projection_width, image_height / projection_height)))
+
+    for _ in range(8):
+        plan = build_render_segments(
+            image_mod,
+            image_draw_mod,
+            border,
+            line_specs,
+            metadata,
+            image_width,
+            missing_value,
+            base_font_size_override=guess,
+        )
+        canvas_w, canvas_h = estimate_image_footer_canvas_size(image_width, image_height, plan)
+        fit_scale = min(projection_width / canvas_w, projection_height / canvas_h)
+        if fit_scale <= 0:
+            break
+
+        apparent_px = guess * fit_scale
+        if abs(apparent_px - reference_font_px) < 0.25:
+            break
+
+        ideal = max(8, round(reference_font_px / fit_scale))
+        if abs(ideal - guess) <= 1:
+            guess = ideal
+            break
+
+        guess = max(8, round((guess + ideal) / 2))
+
+    return guess
 
 
 def build_render_segments(
@@ -699,18 +776,26 @@ def annotate_image(input_path: Path, output_path: Path, profile: dict[str, Any])
 
     written: list[Path] = []
 
-    projection_target = resolve_projection_reference_resolution(border)
+    projection_w, projection_h = resolve_projection_reference_resolution(border)
 
-    base_font_size_override: int | None = None
-    if projection_target is not None:
-        projection_w, projection_h = projection_target
-        font_size_adjust = parse_float(border.get("font-size-adjust", border.get("font_size_adjust")), 1.0)
-        if font_size_adjust <= 0:
-            raise ValueError("font-size-adjust must be > 0")
+    font_size_adjust = parse_float(border.get("font-size-adjust", border.get("font_size_adjust")), 1.0)
+    if font_size_adjust <= 0:
+        raise ValueError("font-size-adjust must be > 0")
 
-        reference_font_size = reference_font_size_for_resolution(projection_w, projection_h, font_size_adjust)
-        fit_scale = max(width / projection_w, height / projection_h)
-        base_font_size_override = max(8, round(reference_font_size * fit_scale))
+    reference_font_size = reference_font_size_for_resolution(projection_w, projection_h, font_size_adjust)
+    base_font_size_override = compute_projection_consistent_base_font_size(
+        image_mod,
+        image_draw_mod,
+        border,
+        line_specs,
+        metadata,
+        width,
+        height,
+        missing_value,
+        projection_w,
+        projection_h,
+        reference_font_size,
+    )
 
     render_plan = build_render_segments(
         image_mod,
@@ -776,11 +861,14 @@ def main() -> int:
             "  @font-weight normal|bold\n"
             "  optional inline segments: [-- $license]\n"
             "\n"
-            "Projection reference is optional and requires exactly two of:\n"
-            "  projection-aspect-ratio, projection-pixel-width, projection-pixel-height\n"
-            "The third value is derived automatically.\n"
+            "Projection reference defines consistent on-screen text size and uses either:\n"
+            "  projection-aspect-ratio/projection-pixel-width/projection-pixel-height\n"
+            "or fallback keys:\n"
+            "  aspect-ratio/pixel-width/pixel-height\n"
+            "Provide exactly two keys in one set; the third is derived.\n"
+            "If none are provided, 1920x1080 (16:9) is assumed.\n"
             "\n"
-            "Base font size is estimated from projection height with optional presets.\n"
+            "Base font size is calibrated against projection fit scaling.\n"
             "Optional: @font-size-adjust 0.95 (or 1.05) to nudge all screen sizes.\n"
             "line-chars/min-font-points tune baseline footer layout behavior.\n"
         ),

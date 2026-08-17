@@ -6,7 +6,7 @@
 
 @font-family American Typewriter, Courier New, Monospace
 @render-dpi 300
-@font-size-adjust 0.80
+@font-size-adjust 1.00
 @line-spacing-ratio 0.30
 @border-lines 1.0
 @vertical-padding-lines 0.45
@@ -16,6 +16,6 @@
 @justify center
 
 $title
-$caption  @scale 0.80  @wrap 0.92
-[$camera-model][, $shutter-speed][, f/$aperture][, ISO $iso]
-$copyright
+$caption  @wrap 0.92  @scale 0.50
+[$camera-model][ -- $shutter-speed][ -- f/$aperture][ -- ISO $iso]  @scale 0.50
+$copyright [-- $license]  @scale 0.50
