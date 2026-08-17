@@ -646,6 +646,28 @@ def draw_segments(
         y += text_height + line_spacing
 
 
+def save_jpeg_with_metadata(canvas: Any, output_path: Path, source_info: dict[str, Any]) -> None:
+    save_kwargs: dict[str, Any] = {
+        "format": "JPEG",
+        "quality": 100,
+        "subsampling": 0,
+    }
+
+    exif_bytes = source_info.get("exif")
+    if exif_bytes:
+        save_kwargs["exif"] = exif_bytes
+
+    icc_profile = source_info.get("icc_profile")
+    if icc_profile:
+        save_kwargs["icc_profile"] = icc_profile
+
+    dpi = source_info.get("dpi")
+    if dpi:
+        save_kwargs["dpi"] = dpi
+
+    canvas.save(output_path, **save_kwargs)
+
+
 def annotate_image(input_path: Path, output_path: Path, profile: dict[str, Any]) -> list[Path]:
     border = profile["border"]
     line_specs = profile["line_specs"]
@@ -664,7 +686,10 @@ def annotate_image(input_path: Path, output_path: Path, profile: dict[str, Any])
     image_mod = importlib.import_module("PIL.Image")
     image_draw_mod = importlib.import_module("PIL.ImageDraw")
 
-    image = image_mod.open(input_path).convert("RGB")
+    source_image = image_mod.open(input_path)
+    source_info = dict(source_image.info)
+    image = source_image.convert("RGB")
+    source_image.close()
     width, height = image.size
 
     variables = collect_variables(line_specs)
@@ -723,7 +748,7 @@ def annotate_image(input_path: Path, output_path: Path, profile: dict[str, Any])
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(output_path, format="JPEG", quality=95)
+    save_jpeg_with_metadata(canvas, output_path, source_info)
     written.append(output_path)
 
     return written
