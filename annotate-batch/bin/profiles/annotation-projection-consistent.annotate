@@ -1,0 +1,21 @@
+# Preserve original image dimensions while normalizing footer readability for projector playback.
+# Text sizing is computed from the projection reference and scaled so fit-to-screen shows
+# consistent typography across mixed image sizes/aspect ratios.
+@projection-aspect-ratio 16:9
+@projection-pixel-width 1920
+
+@font-family American Typewriter, Courier New, Monospace
+@render-dpi 300
+@font-size-adjust 0.80
+@line-spacing-ratio 0.30
+@border-lines 1.0
+@vertical-padding-lines 0.45
+@horizontal-padding-ratio 0.03
+@background-color #000000
+@text-color #FFFFFF
+@justify center
+
+$title
+$caption  @scale 0.80  @wrap 0.92
+[$camera-model][, $shutter-speed][, f/$aperture][, ISO $iso]
+$copyright

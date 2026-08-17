@@ -31,23 +31,31 @@ ATTRIBUTE_TAG_MAP: dict[str, list[str]] = {
     "caption": ["XMP-dc:Description"],
     "copyright": ["XMP-dc:Rights", "IPTC:CopyrightNotice"],
     "license": ["XMP-xmpRights:UsageTerms"],
-    "capture-date": ["EXIF:DateTimeOriginal", "XMP-xmp:CreateDate"],
-    "camera-make": ["EXIF:Make"],
-    "camera-model": ["EXIF:Model"],
-    "camera": ["EXIF:Make", "EXIF:Model"],
-    "iso": ["EXIF:ISO"],
-    "aperture": ["EXIF:FNumber"],
-    "shutter-speed": ["EXIF:ExposureTime"],
-    "focal-length": ["EXIF:FocalLength"],
-    "lens": ["EXIF:LensModel"],
-    "lens-model": ["EXIF:LensModel"],
+    "capture-date": ["EXIF:DateTimeOriginal", "XMP-exif:DateTimeOriginal", "XMP-xmp:CreateDate"],
+    "camera-make": ["EXIF:Make", "XMP-exif:Make", "XMP-tiff:Make"],
+    "camera-model": ["EXIF:Model", "EXIF:CameraModelName", "XMP-exif:Model", "XMP-tiff:Model"],
+    "camera": [
+        "EXIF:Make",
+        "XMP-exif:Make",
+        "XMP-tiff:Make",
+        "EXIF:Model",
+        "EXIF:CameraModelName",
+        "XMP-exif:Model",
+        "XMP-tiff:Model",
+    ],
+    "iso": ["EXIF:ISO", "EXIF:PhotographicSensitivity", "XMP-exif:ISOSpeedRatings"],
+    "aperture": ["EXIF:FNumber", "Composite:Aperture", "XMP-exif:FNumber"],
+    "shutter-speed": ["EXIF:ExposureTime", "Composite:ShutterSpeed", "XMP-exif:ExposureTime"],
+    "focal-length": ["EXIF:FocalLength", "Composite:FocalLength"],
+    "lens": ["EXIF:LensModel", "EXIF:LensID", "Composite:LensID", "XMP-exifEX:LensModel"],
+    "lens-model": ["EXIF:LensModel", "EXIF:LensID", "Composite:LensID", "XMP-exifEX:LensModel"],
     # Backward-compatible underscore aliases.
-    "capture_date": ["EXIF:DateTimeOriginal", "XMP-xmp:CreateDate"],
-    "camera_make": ["EXIF:Make"],
-    "camera_model": ["EXIF:Model"],
-    "shutter_speed": ["EXIF:ExposureTime"],
-    "focal_length": ["EXIF:FocalLength"],
-    "lens_model": ["EXIF:LensModel"],
+    "capture_date": ["EXIF:DateTimeOriginal", "XMP-exif:DateTimeOriginal", "XMP-xmp:CreateDate"],
+    "camera_make": ["EXIF:Make", "XMP-exif:Make", "XMP-tiff:Make"],
+    "camera_model": ["EXIF:Model", "EXIF:CameraModelName", "XMP-exif:Model", "XMP-tiff:Model"],
+    "shutter_speed": ["EXIF:ExposureTime", "Composite:ShutterSpeed", "XMP-exif:ExposureTime"],
+    "focal_length": ["EXIF:FocalLength", "Composite:FocalLength"],
+    "lens_model": ["EXIF:LensModel", "EXIF:LensID", "Composite:LensID", "XMP-exifEX:LensModel"],
 }
 
 
@@ -202,8 +210,11 @@ def build_display_metadata(variables: list[str], exif_values: dict[str, str]) ->
 
     for var in variables:
         if var == "camera":
-            make = first_nonempty(exif_values, ["EXIF:Make"])
-            model = first_nonempty(exif_values, ["EXIF:Model"])
+            make = first_nonempty(exif_values, ["EXIF:Make", "XMP-exif:Make", "XMP-tiff:Make"])
+            model = first_nonempty(
+                exif_values,
+                ["EXIF:Model", "EXIF:CameraModelName", "XMP-exif:Model", "XMP-tiff:Model"],
+            )
             display[var] = " ".join(part for part in [make, model] if part).strip()
             continue
 
@@ -384,18 +395,20 @@ def parse_positive_int(value: Any, label: str) -> int:
     return out
 
 
-def resolve_screen_target_resolution(border: dict[str, Any]) -> tuple[int, int]:
-    aspect_raw = border.get("aspect-ratio", border.get("aspect_ratio"))
-    pixel_width_raw = border.get("pixel-width", border.get("pixel_width"))
-    pixel_height_raw = border.get("pixel-height", border.get("pixel_height"))
-
+def resolve_target_resolution(
+    aspect_raw: Any,
+    pixel_width_raw: Any,
+    pixel_height_raw: Any,
+    *,
+    context_label: str,
+) -> tuple[int, int]:
     provided = sum(
         value is not None and str(value).strip() != ""
         for value in [aspect_raw, pixel_width_raw, pixel_height_raw]
     )
     if provided != 2:
         raise ValueError(
-            "screen-footer requires exactly two of: aspect-ratio, pixel-width, pixel-height"
+            f"{context_label} requires exactly two of: aspect-ratio, pixel-width, pixel-height"
         )
 
     aspect: tuple[int, int] | None = None
@@ -416,13 +429,44 @@ def resolve_screen_target_resolution(border: dict[str, Any]) -> tuple[int, int]:
 
     if pixel_width is None or pixel_height is None:
         raise ValueError(
-            "could not resolve screen target resolution; check aspect-ratio/pixel-width/pixel-height"
+            f"could not resolve {context_label}; check aspect-ratio/pixel-width/pixel-height"
         )
 
     return pixel_width, pixel_height
 
 
-def screen_font_size_for_resolution(width: int, height: int, adjust: float = 1.0) -> int:
+def resolve_projection_reference_resolution(border: dict[str, Any]) -> tuple[int, int] | None:
+    projection_aspect_raw = border.get("projection-aspect-ratio", border.get("projection_aspect_ratio"))
+    projection_pixel_width_raw = border.get(
+        "projection-pixel-width",
+        border.get("projection_pixel_width", border.get("projection-width", border.get("projection_width"))),
+    )
+    projection_pixel_height_raw = border.get(
+        "projection-pixel-height",
+        border.get("projection_pixel_height", border.get("projection-height", border.get("projection_height"))),
+    )
+
+    prefixed_provided = sum(
+        value is not None and str(value).strip() != ""
+        for value in [projection_aspect_raw, projection_pixel_width_raw, projection_pixel_height_raw]
+    )
+    if prefixed_provided == 2:
+        return resolve_target_resolution(
+            projection_aspect_raw,
+            projection_pixel_width_raw,
+            projection_pixel_height_raw,
+            context_label="projection reference",
+        )
+    if prefixed_provided != 0:
+        raise ValueError(
+            "projection reference requires exactly two of: "
+            "projection-aspect-ratio, projection-pixel-width, projection-pixel-height"
+        )
+
+    return None
+
+
+def reference_font_size_for_resolution(width: int, height: int, adjust: float = 1.0) -> int:
     size = SCREEN_FONT_SIZE_PRESETS.get((width, height))
     if size is None:
         size = max(12, round(height * 0.028))
@@ -614,8 +658,8 @@ def annotate_image(input_path: Path, output_path: Path, profile: dict[str, Any])
 
     if align not in {"left", "center", "right"}:
         raise ValueError("justify must be one of: left, center, right")
-    if layout not in {"image-footer", "screen-footer"}:
-        raise ValueError("layout must be one of: image-footer, screen-footer")
+    if layout and layout != "image-footer":
+        raise ValueError("layout must be image-footer (screen-footer mode was removed)")
 
     image_mod = importlib.import_module("PIL.Image")
     image_draw_mod = importlib.import_module("PIL.ImageDraw")
@@ -630,70 +674,18 @@ def annotate_image(input_path: Path, output_path: Path, profile: dict[str, Any])
 
     written: list[Path] = []
 
-    if layout == "image-footer":
-        render_plan = build_render_segments(
-            image_mod,
-            image_draw_mod,
-            border,
-            line_specs,
-            metadata,
-            width,
-            missing_value,
-        )
+    projection_target = resolve_projection_reference_resolution(border)
 
-        side_border = int(render_plan["border_thickness"])
-        top_border = int(render_plan["border_thickness"])
-        footer_height = int(render_plan["footer_height"])
-        footer_vertical_padding = int(render_plan["footer_vertical_padding"])
+    base_font_size_override: int | None = None
+    if projection_target is not None:
+        projection_w, projection_h = projection_target
+        font_size_adjust = parse_float(border.get("font-size-adjust", border.get("font_size_adjust")), 1.0)
+        if font_size_adjust <= 0:
+            raise ValueError("font-size-adjust must be > 0")
 
-        canvas_width = width + (2 * side_border)
-        canvas_height = top_border + height + footer_height
-        canvas = image_mod.new("RGB", (canvas_width, canvas_height), color=background_color)
-        canvas.paste(image, (side_border, top_border))
-
-        draw = image_draw_mod.Draw(canvas)
-        y_start = top_border + height + footer_vertical_padding
-        draw_segments(
-            draw,
-            render_plan["rendered_segments"],
-            align,
-            side_border,
-            width,
-            int(render_plan["horizontal_padding"]),
-            y_start,
-            int(render_plan["line_spacing"]),
-            text_color,
-        )
-
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        canvas.save(output_path, format="JPEG", quality=95)
-        written.append(output_path)
-        return written
-
-    # screen-footer mode: single fixed output resolution derived from any two directives.
-    target_w, target_h = resolve_screen_target_resolution(border)
-
-    font_size_adjust = parse_float(border.get("font-size-adjust", border.get("font_size_adjust")), 1.0)
-    if font_size_adjust <= 0:
-        raise ValueError("font-size-adjust must be > 0")
-
-    base_font_size = screen_font_size_for_resolution(target_w, target_h, font_size_adjust)
-
-    # First pass estimate, then recompute with actual content width.
-    plan_first = build_render_segments(
-        image_mod,
-        image_draw_mod,
-        border,
-        line_specs,
-        metadata,
-        target_w,
-        missing_value,
-        base_font_size_override=base_font_size,
-    )
-    side_border = int(plan_first["border_thickness"])
-    top_border = int(plan_first["border_thickness"])
-
-    content_w = max(40, target_w - (2 * side_border))
+        reference_font_size = reference_font_size_for_resolution(projection_w, projection_h, font_size_adjust)
+        fit_scale = max(width / projection_w, height / projection_h)
+        base_font_size_override = max(8, round(reference_font_size * fit_scale))
 
     render_plan = build_render_segments(
         image_mod,
@@ -701,46 +693,29 @@ def annotate_image(input_path: Path, output_path: Path, profile: dict[str, Any])
         border,
         line_specs,
         metadata,
-        content_w,
+        width,
         missing_value,
-        base_font_size_override=base_font_size,
+        base_font_size_override=base_font_size_override,
     )
+
     side_border = int(render_plan["border_thickness"])
     top_border = int(render_plan["border_thickness"])
-    content_w = max(40, target_w - (2 * side_border))
-
     footer_height = int(render_plan["footer_height"])
     footer_vertical_padding = int(render_plan["footer_vertical_padding"])
 
-    image_frame_h = target_h - top_border - footer_height
-    image_frame_w = content_w
-    if image_frame_h <= 20 or image_frame_w <= 20:
-        raise ValueError(
-            f"Output resolution {target_w}x{target_h} is too small for current text/border settings"
-        )
-
-    scale = min(image_frame_w / width, image_frame_h / height)
-    draw_w = max(1, int(round(width * scale)))
-    draw_h = max(1, int(round(height * scale)))
-    resized = image.resize((draw_w, draw_h), resample=image_mod.Resampling.LANCZOS)
-
-    canvas = image_mod.new("RGB", (target_w, target_h), color=background_color)
-
-    frame_left = side_border
-    frame_top = top_border
-    paste_x = frame_left + (image_frame_w - draw_w) // 2
-    paste_y = frame_top + (image_frame_h - draw_h) // 2
-    canvas.paste(resized, (paste_x, paste_y))
+    canvas_width = width + (2 * side_border)
+    canvas_height = top_border + height + footer_height
+    canvas = image_mod.new("RGB", (canvas_width, canvas_height), color=background_color)
+    canvas.paste(image, (side_border, top_border))
 
     draw = image_draw_mod.Draw(canvas)
-    footer_top = paste_y + draw_h
-    y_start = footer_top + footer_vertical_padding
+    y_start = top_border + height + footer_vertical_padding
     draw_segments(
         draw,
         render_plan["rendered_segments"],
         align,
-        frame_left,
-        image_frame_w,
+        side_border,
+        width,
         int(render_plan["horizontal_padding"]),
         y_start,
         int(render_plan["line_spacing"]),
@@ -756,7 +731,7 @@ def annotate_image(input_path: Path, output_path: Path, profile: dict[str, Any])
 
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
-    default_profile_path = script_dir / "profiles" / "annotation-screen-footer.annotate"
+    default_profile_path = script_dir / "profiles" / "annotation-projection-consistent.annotate"
 
     parser = argparse.ArgumentParser(
         description=(
@@ -765,24 +740,24 @@ def main() -> int:
         ),
         epilog=(
             "Example:\n"
-            "  python3 annotate-batch/bin/annotate-border.py input.jpg output.jpg --profile annotate-batch/bin/profiles/annotation-screen-footer.annotate\n"
+            "  python3 annotate-batch/bin/annotate-border.py input.jpg output.jpg --profile annotate-batch/bin/profiles/annotation-projection-consistent.annotate\n"
             "\n"
             "Template notes:\n"
-            "  @layout image-footer|screen-footer\n"
-            "  @aspect-ratio 16:9\n"
-            "  @pixel-width 1920\n"
-            "  @pixel-height 1080\n"
+            "  @layout image-footer (optional; this is the only supported layout)\n"
+            "  @projection-aspect-ratio 16:9\n"
+            "  @projection-pixel-width 1920\n"
+            "  @projection-pixel-height 1080\n"
             "  @justify left|center|right\n"
             "  @font-weight normal|bold\n"
             "  optional inline segments: [-- $license]\n"
             "\n"
-            "In screen-footer mode, provide exactly two of:\n"
-            "  aspect-ratio, pixel-width, pixel-height\n"
+            "Projection reference is optional and requires exactly two of:\n"
+            "  projection-aspect-ratio, projection-pixel-width, projection-pixel-height\n"
             "The third value is derived automatically.\n"
             "\n"
-            "Base font size is estimated from output height with optional presets.\n"
+            "Base font size is estimated from projection height with optional presets.\n"
             "Optional: @font-size-adjust 0.95 (or 1.05) to nudge all screen sizes.\n"
-            "line-chars/min-font-points are mainly for image-footer tuning.\n"
+            "line-chars/min-font-points tune baseline footer layout behavior.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -793,7 +768,7 @@ def main() -> int:
         default=str(default_profile_path),
         help=(
             "Path to plain-text annotate template "
-            "(default: script-dir/profiles/annotation-screen-footer.annotate)"
+            "(default: script-dir/profiles/annotation-projection-consistent.annotate)"
         ),
     )
 

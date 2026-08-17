@@ -37,7 +37,7 @@ def write_manifest_json(manifest_path: Path, payload: dict[str, Any]) -> None:
 
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
-    default_profile_path = script_dir / "profiles" / "annotation-screen-footer.annotate"
+    default_profile_path = script_dir / "profiles" / "annotation-projection-consistent.annotate"
 
     parser = argparse.ArgumentParser(
         description=(
@@ -66,7 +66,7 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         default=str(default_profile_path),
-        help="Annotate profile path (default: script-dir/profiles/annotation-screen-footer.annotate)",
+        help="Annotate profile path (default: script-dir/profiles/annotation-projection-consistent.annotate)",
     )
     parser.add_argument(
         "--glob",

@@ -18,6 +18,13 @@ h1, h2 {
   margin-top: 0;
 }
 
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
 .subtle {
   color: #555;
 }
@@ -38,12 +45,29 @@ h1, h2 {
 
 .button {
   display: inline-block;
-  margin-top: 0.5rem;
   padding: 0.4rem 0.8rem;
   border-radius: 6px;
   background: #2b6cb0;
   color: #fff;
   cursor: pointer;
+  border: none;
+  font: inherit;
+}
+
+.dropzone .button {
+  margin-top: 0.5rem;
+}
+
+.section-header .button {
+  margin-top: 0;
+}
+
+.button.danger {
+  background: #b42318;
+}
+
+.button.danger:hover {
+  background: #912018;
 }
 
 #fileInput {

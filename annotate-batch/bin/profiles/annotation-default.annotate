@@ -1,7 +1,6 @@
 # Global directives
-@layout screen-footer
-@aspect-ratio 16:9
-@pixel-width 1920
+@projection-aspect-ratio 16:9
+@projection-pixel-width 1920
 @font-family Arial, Sans-Serif
 
 @render-dpi 300
@@ -17,6 +16,6 @@
 # Render lines
 $capture-date -- $title
 $caption  @wrap 0.92  @scale 0.92
-$camera, ISO $iso, f/$aperture, $shutter-speed
+$camera[, ISO $iso][, f/$aperture][, $shutter-speed]  @when any(camera,iso,aperture,shutter-speed)
 $copyright
 $license

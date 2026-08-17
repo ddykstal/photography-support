@@ -8,6 +8,7 @@ Simple web wrapper around `annotate-border.py` for batch upload + view/download.
 - Annotates each upload using your existing profile/template system
 - Lists annotated files with view/download links
 - Lightweight per-browser-session isolation (files are separated by session)
+- UI clear button to wipe all stored uploads/annotated files and session folders
 
 ## Layout
 
@@ -50,7 +51,14 @@ ANNOTATE_SESSION_SECRET='replace-with-a-long-random-secret' .venv/bin/gunicorn w
 
 Default profile:
 
-- `annotate-batch/bin/profiles/annotation-screen-footer.annotate`
+- `annotate-batch/bin/profiles/annotation-projection-consistent.annotate`
+
+Built-in alternatives:
+
+- `annotate-batch/bin/profiles/annotation-default.annotate`
+- `annotate-batch/bin/profiles/annotation-snapshot.annotate`
+
+Note: `screen-footer` mode has been removed. `image-footer` is now the only supported layout.
 
 Override via environment variable:
 

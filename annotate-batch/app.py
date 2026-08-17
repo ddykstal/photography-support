@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import secrets
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ BIN_DIR = APP_DIR / "bin"
 UPLOAD_DIR = APP_DIR / "uploads"
 ANNOTATED_DIR = APP_DIR / "annotated"
 ANNOTATE_SCRIPT = BIN_DIR / "annotate-border.py"
-DEFAULT_PROFILE = BIN_DIR / "profiles" / "annotation-screen-footer.annotate"
+DEFAULT_PROFILE = BIN_DIR / "profiles" / "annotation-projection-consistent.annotate"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg"}
 SESSION_COOKIE_KEY = "annotate_batch_session_id"
 DEFAULT_SESSION_SECRET = "annotate-batch-dev-secret-change-me"
@@ -89,6 +90,22 @@ def list_annotated_files(directory: Path) -> list[dict[str, Any]]:
             }
         )
     return items
+
+
+def clear_directory_children(root: Path) -> int:
+    removed = 0
+    if not root.exists():
+        return removed
+
+    for child in root.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+            removed += 1
+        else:
+            child.unlink()
+            removed += 1
+
+    return removed
 
 
 def create_app() -> Flask:
@@ -173,6 +190,25 @@ def create_app() -> Flask:
                 "profile": str(profile_path),
                 "results": results,
                 "files": list_annotated_files(annotated_dir),
+            }
+        )
+
+    @app.post("/api/clear")
+    def api_clear() -> Any:
+        try:
+            removed_upload_items = clear_directory_children(UPLOAD_DIR)
+            removed_annotated_items = clear_directory_children(ANNOTATED_DIR)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"Failed to clear storage: {exc}"}), 500
+
+        # Start a fresh isolated bucket for the current browser after global wipe.
+        session.pop(SESSION_COOKIE_KEY, None)
+
+        return jsonify(
+            {
+                "status": "ok",
+                "removed_upload_items": removed_upload_items,
+                "removed_annotated_items": removed_annotated_items,
             }
         )
 
