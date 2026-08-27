@@ -18,8 +18,8 @@ APP_DIR = Path(__file__).resolve().parent
 BIN_DIR = APP_DIR / "bin"
 UPLOAD_DIR = APP_DIR / "uploads"
 ANNOTATED_DIR = APP_DIR / "annotated"
-ANNOTATE_SCRIPT = BIN_DIR / "annotate-border.py"
-DEFAULT_PROFILE = BIN_DIR / "profiles" / "annotation-projection-consistent.annotate"
+ANNOTATE_SCRIPT = BIN_DIR / "annotate-border-v2.py"
+DEFAULT_PROFILE = BIN_DIR / "profiles" / "annotation-v2-demo.annotate"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg"}
 SESSION_COOKIE_KEY = "annotate_batch_session_id"
 DEFAULT_SESSION_SECRET = "annotate-batch-dev-secret-change-me"
@@ -136,9 +136,9 @@ def create_app() -> Flask:
             return jsonify({"error": "No files uploaded (use field name 'files')."}), 400
 
         try:
-            profile = annotator.load_profile(profile_path)
+            profile = annotator.parse_profile_v2(profile_path)
         except Exception as exc:  # noqa: BLE001
-            return jsonify({"error": f"Could not load profile: {exc}"}), 500
+            return jsonify({"error": f"Could not load V2 profile: {exc}"}), 500
 
         upload_dir = session_upload_dir()
         annotated_dir = session_annotated_dir()
@@ -167,7 +167,7 @@ def create_app() -> Flask:
 
             try:
                 file_storage.save(upload_path)
-                annotator.annotate_image(upload_path, output_path, profile)
+                annotator.annotate_v2(upload_path, output_path, profile, diagnostics=False)
                 results.append(
                     {
                         "file": original_name,

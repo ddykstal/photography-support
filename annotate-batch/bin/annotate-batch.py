@@ -37,17 +37,17 @@ def write_manifest_json(manifest_path: Path, payload: dict[str, Any]) -> None:
 
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
-    default_profile_path = script_dir / "profiles" / "annotation-projection-consistent.annotate"
+    default_profile_path = script_dir / "profiles" / "annotation-v2-demo.annotate"
 
     parser = argparse.ArgumentParser(
         description=(
             "Batch-annotate JPEGs from an upload directory into a download directory "
-            "using annotate-border.py profiles."
+            "using annotate-border-v2.py profiles."
         ),
         epilog=(
             "Examples:\n"
             "  python3 annotate-batch/bin/annotate-batch.py\n"
-            "  python3 annotate-batch/bin/annotate-batch.py --upload-dir ./upload --download-dir ./download --profile annotate-batch/bin/profiles/annotation-snapshot.annotate\n"
+            "  python3 annotate-batch/bin/annotate-batch.py --upload-dir ./upload --download-dir ./download --profile annotate-batch/bin/profiles/annotation-v2-demo.annotate\n"
             "  python3 annotate-batch/bin/annotate-batch.py --recursive --glob '*.jpg' --glob '*.jpeg' --limit 10\n"
             "  python3 annotate-batch/bin/annotate-batch.py --manifest-json ./download/manifest.json\n"
         ),
@@ -66,7 +66,7 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         default=str(default_profile_path),
-        help="Annotate profile path (default: script-dir/profiles/annotation-projection-consistent.annotate)",
+        help="Annotate V2 profile path (default: script-dir/profiles/annotation-v2-demo.annotate)",
     )
     parser.add_argument(
         "--glob",
@@ -110,7 +110,7 @@ def main() -> int:
     upload_dir = Path(args.upload_dir).expanduser().resolve()
     download_dir = Path(args.download_dir).expanduser().resolve()
     profile_path = Path(args.profile).expanduser().resolve()
-    annotate_path = Path(__file__).with_name("annotate-border.py").resolve()
+    annotate_path = Path(__file__).with_name("annotate-border-v2.py").resolve()
     manifest_path = Path(args.manifest_json).expanduser().resolve() if args.manifest_json else None
 
     if not upload_dir.exists() or not upload_dir.is_dir():
@@ -118,14 +118,14 @@ def main() -> int:
     if not profile_path.exists() or not profile_path.is_file():
         parser.error(f"Profile file not found: {profile_path}")
     if not annotate_path.exists() or not annotate_path.is_file():
-        parser.error(f"annotate-border.py not found next to script: {annotate_path}")
+        parser.error(f"annotate-border-v2.py not found next to script: {annotate_path}")
     if args.limit < 0:
         parser.error("--limit must be >= 0")
 
     patterns = args.globs or ["*.jpg", "*.jpeg", "*.JPG", "*.JPEG"]
 
     annotator = load_annotator_module(annotate_path)
-    profile = annotator.load_profile(profile_path)
+    profile = annotator.parse_profile_v2(profile_path)
 
     all_images = collect_images(upload_dir, patterns, args.recursive)
     images = all_images[: args.limit] if args.limit > 0 else all_images
@@ -171,7 +171,7 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            annotator.annotate_image(src, out, profile)
+            annotator.annotate_v2(src, out, profile, diagnostics=False)
             processed += 1
             items.append(
                 {

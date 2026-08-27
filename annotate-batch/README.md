@@ -1,6 +1,6 @@
 # annotate-batch (bare bones web UI)
 
-Simple web wrapper around `annotate-border.py` for batch upload + view/download.
+Simple web wrapper around `annotate-border-v2.py` for batch upload + view/download.
 
 ## Features
 
@@ -17,8 +17,9 @@ Simple web wrapper around `annotate-border.py` for batch upload + view/download.
 - `annotated/` - rendered output files
 - `templates/index.html` - minimal UI
 - `static/` - CSS + JS
-- `bin/annotate-border.py` - annotation engine used by web app
-- `bin/profiles/*.annotate` - profile templates used by web app
+- `bin/annotate-border-v2.py` - V2 annotation engine used by web app
+- `bin/profiles/annotation-v2-*.annotate` - V2 profile templates used by web app
+- `PROFILE-V2.md` - V2 profile format specification
 
 ## Local run
 
@@ -51,14 +52,13 @@ ANNOTATE_SESSION_SECRET='replace-with-a-long-random-secret' .venv/bin/gunicorn w
 
 Default profile:
 
-- `annotate-batch/bin/profiles/annotation-projection-consistent.annotate`
+- `annotate-batch/bin/profiles/annotation-v2-demo.annotate`
 
 Built-in alternatives:
 
-- `annotate-batch/bin/profiles/annotation-default.annotate`
-- `annotate-batch/bin/profiles/annotation-snapshot.annotate`
+- `annotate-batch/bin/profiles/annotation-v2-125.annotate`
 
-Note: `screen-footer` mode has been removed. `image-footer` is now the only supported layout.
+V2 profiles must include `@profile-version 2` and follow the box-model spec in `PROFILE-V2.md`.
 
 Override via environment variable:
 
@@ -166,5 +166,5 @@ Expected:
 Inside your vhost, set a specific annotation profile:
 
 ```apache
-WSGISetEnv ANNOTATE_PROFILE /srv/photography-support/annotate-batch/bin/profiles/annotation-snapshot.annotate
+WSGISetEnv ANNOTATE_PROFILE /srv/photography-support/annotate-batch/bin/profiles/annotation-v2-125.annotate
 ```
