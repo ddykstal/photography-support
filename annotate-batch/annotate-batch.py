@@ -41,7 +41,8 @@ def write_manifest_json(manifest_path: Path, payload: dict[str, Any]) -> None:
 
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
-    default_profile_path = script_dir / "profiles" / "annotation-v2-demo.annotate"
+    annotate_dir = script_dir.parent / "annotate-border"
+    default_profile_path = annotate_dir / "profiles" / "annotation-v2-demo.annotate"
 
     parser = argparse.ArgumentParser(
         description=(
@@ -50,10 +51,10 @@ def main() -> int:
         ),
         epilog=(
             "Examples:\n"
-            "  python3 annotate-batch/bin/annotate-batch.py\n"
-            "  python3 annotate-batch/bin/annotate-batch.py --upload-dir ./upload --download-dir ./download --profile annotate-batch/bin/profiles/annotation-v2-demo.annotate\n"
-            "  python3 annotate-batch/bin/annotate-batch.py --recursive --glob '*.jpg' --glob '*.jpeg' --limit 10\n"
-            "  python3 annotate-batch/bin/annotate-batch.py --manifest-json ./download/manifest.json\n"
+            "  python3 annotate-batch/annotate-batch.py\n"
+            "  python3 annotate-batch/annotate-batch.py --upload-dir ./upload --download-dir ./download --profile annotate-border/profiles/annotation-v2-demo.annotate\n"
+            "  python3 annotate-batch/annotate-batch.py --recursive --glob '*.jpg' --glob '*.jpeg' --limit 10\n"
+            "  python3 annotate-batch/annotate-batch.py --manifest-json ./download/manifest.json\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -70,7 +71,7 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         default=str(default_profile_path),
-        help="Annotate V2 profile path (default: script-dir/profiles/annotation-v2-demo.annotate)",
+        help="Annotate V2 profile path (default: ../annotate-border/profiles/annotation-v2-demo.annotate)",
     )
     parser.add_argument(
         "--glob",
@@ -114,7 +115,7 @@ def main() -> int:
     upload_dir = Path(args.upload_dir).expanduser().resolve()
     download_dir = Path(args.download_dir).expanduser().resolve()
     profile_path = Path(args.profile).expanduser().resolve()
-    annotate_path = Path(__file__).with_name("annotate-border-v2.py").resolve()
+    annotate_path = (script_dir.parent / "annotate-border" / "annotate-border-v2.py").resolve()
     manifest_path = Path(args.manifest_json).expanduser().resolve() if args.manifest_json else None
 
     if not upload_dir.exists() or not upload_dir.is_dir():
@@ -122,7 +123,7 @@ def main() -> int:
     if not profile_path.exists() or not profile_path.is_file():
         parser.error(f"Profile file not found: {profile_path}")
     if not annotate_path.exists() or not annotate_path.is_file():
-        parser.error(f"annotate-border-v2.py not found next to script: {annotate_path}")
+        parser.error(f"annotate-border-v2.py not found: {annotate_path}")
     if args.limit < 0:
         parser.error("--limit must be >= 0")
 

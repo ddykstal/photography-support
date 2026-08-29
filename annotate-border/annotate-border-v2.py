@@ -877,8 +877,8 @@ def main() -> int:
         description="Annotate JPEG with V2 box-model profiles (@profile-version 2).",
         epilog=(
             "Example:\n"
-            "  python3 annotate-batch/bin/annotate-border-v2.py input.jpg output.jpg "
-            "--profile annotate-batch/bin/profiles/annotation-v2-demo.annotate\n"
+            "  python3 annotate-border/annotate-border-v2.py input.jpg output.jpg "
+            "--profile annotate-border/profiles/annotation-v2-demo.annotate\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

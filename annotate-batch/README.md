@@ -17,9 +17,9 @@ Simple web wrapper around `annotate-border-v2.py` for batch upload + view/downlo
 - `annotated/` - rendered output files
 - `templates/index.html` - minimal UI
 - `static/` - CSS + JS
-- `bin/annotate-border-v2.py` - V2 annotation engine used by web app
-- `bin/profiles/annotation-v2-*.annotate` - V2 profile templates used by web app
-- `PROFILE-V2.md` - V2 profile format specification
+- `annotate-border/annotate-border-v2.py` - V2 annotation engine used by web app
+- `annotate-border/profiles/annotation-v2-*.annotate` - V2 profile templates used by web app
+- `annotate-border/PROFILE-V2.md` - V2 profile format specification
 
 ## Local run
 
@@ -52,13 +52,13 @@ ANNOTATE_SESSION_SECRET='replace-with-a-long-random-secret' .venv/bin/gunicorn w
 
 Default profile:
 
-- `annotate-batch/bin/profiles/annotation-v2-demo.annotate`
+- `annotate-border/profiles/annotation-v2-demo.annotate`
 
 Built-in alternatives:
 
-- `annotate-batch/bin/profiles/annotation-v2-125.annotate`
+- `annotate-border/profiles/annotation-v2-125.annotate`
 
-V2 profiles must include `@profile-version 2` and follow the box-model spec in `PROFILE-V2.md`.
+V2 profiles must include `@profile-version 2` and follow the box-model spec in `annotate-border/PROFILE-V2.md`.
 
 Override via environment variable:
 
@@ -104,7 +104,7 @@ sudo a2enmod proxy proxy_http headers ssl rewrite
 
 ```bash
 cd /srv/photography-support/annotate-batch
-ANNOTATE_PROFILE=/srv/photography-support/annotate-batch/bin/profiles/annotation-v2-125.annotate \
+ANNOTATE_PROFILE=/srv/photography-support/annotate-border/profiles/annotation-v2-125.annotate \
 ANNOTATE_SESSION_SECRET='replace-with-a-long-random-secret' \
 .venv/bin/gunicorn wsgi:application --bind 127.0.0.1:5050 --workers 2 --threads 4 --timeout 600
 ```
@@ -172,5 +172,5 @@ Expected:
 Set profile at Gunicorn startup (not in Apache):
 
 ```bash
-ANNOTATE_PROFILE=/srv/photography-support/annotate-batch/bin/profiles/annotation-v2-125.annotate
+ANNOTATE_PROFILE=/srv/photography-support/annotate-border/profiles/annotation-v2-125.annotate
 ```

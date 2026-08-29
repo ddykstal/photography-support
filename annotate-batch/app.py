@@ -16,11 +16,11 @@ from werkzeug.utils import secure_filename
 
 
 APP_DIR = Path(__file__).resolve().parent
-BIN_DIR = APP_DIR / "bin"
+ANNOTATE_DIR = APP_DIR.parent / "annotate-border"
 UPLOAD_DIR = APP_DIR / "uploads"
 ANNOTATED_DIR = APP_DIR / "annotated"
-ANNOTATE_SCRIPT = BIN_DIR / "annotate-border-v2.py"
-DEFAULT_PROFILE = BIN_DIR / "profiles" / "annotation-v2-demo.annotate"
+ANNOTATE_SCRIPT = ANNOTATE_DIR / "annotate-border-v2.py"
+DEFAULT_PROFILE = ANNOTATE_DIR / "profiles" / "annotation-v2-demo.annotate"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg"}
 SESSION_COOKIE_KEY = "annotate_batch_session_id"
 DEFAULT_SESSION_SECRET = "annotate-batch-dev-secret-change-me"
