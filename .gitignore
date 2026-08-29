@@ -6,3 +6,12 @@ __pycache__/
 *.jpeg
 *.JPG
 *.JPEG
+
+# annotate-batch local runtime + env
+annotate-batch/.venv/
+annotate-batch/uploads/
+annotate-batch/annotated/
+
+# local env/config/logs
+annotate-batch/.env
+annotate-batch/*.log
