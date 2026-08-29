@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -22,13 +23,20 @@ ANY_RE = re.compile(r"^any\((.*)\)$", re.IGNORECASE)
 # Calibrated baseline: @font-size 1.0 ~= readable default across common images.
 BASE_FONT_RATIO = 0.015
 
+CAPTURE_DATETIME_TAGS = ["EXIF:DateTimeOriginal", "XMP-exif:DateTimeOriginal", "XMP-xmp:CreateDate"]
+CAPTURE_TZ_TAGS = ["EXIF:OffsetTimeOriginal", "XMP-exif:OffsetTimeOriginal", "EXIF:TimeZoneOffset"]
+
+
 ATTRIBUTE_TAG_MAP: dict[str, list[str]] = {
     "identifier": ["XMP-dc:Identifier"],
     "title": ["XMP-dc:Title"],
     "caption": ["XMP-dc:Description"],
     "copyright": ["XMP-dc:Rights", "IPTC:CopyrightNotice"],
     "license": ["XMP-xmpRights:UsageTerms"],
-    "capture-date": ["EXIF:DateTimeOriginal", "XMP-exif:DateTimeOriginal", "XMP-xmp:CreateDate"],
+    "capture-date": [*CAPTURE_DATETIME_TAGS, *CAPTURE_TZ_TAGS],
+    "capture-time": [*CAPTURE_DATETIME_TAGS, *CAPTURE_TZ_TAGS],
+    "capture-datetime": [*CAPTURE_DATETIME_TAGS, *CAPTURE_TZ_TAGS],
+    "capture-tz": [*CAPTURE_DATETIME_TAGS, *CAPTURE_TZ_TAGS],
     "camera-make": ["EXIF:Make", "XMP-exif:Make", "XMP-tiff:Make"],
     "camera-model": ["EXIF:Model", "EXIF:CameraModelName", "XMP-exif:Model", "XMP-tiff:Model"],
     "camera": [
@@ -123,6 +131,7 @@ def parse_when_any(expr: str) -> list[str]:
 
 def parse_box_header(text: str) -> BoxSpec:
     # @box <region> <edge> <align> [scale <float>] [when any(...)]
+    # Options may appear in either order.
     parts = text.split()
     if len(parts) < 4 or parts[0] != "@box":
         raise ValueError(f"Invalid box header: {text!r}")
@@ -151,9 +160,20 @@ def parse_box_header(text: str) -> BoxSpec:
             i += 2
             continue
         if token == "when":
-            expr = " ".join(parts[i + 1 :]).strip()
+            if i + 1 >= len(parts):
+                raise ValueError(f"Missing when expression in: {text!r}")
+
+            expr_tokens: list[str] = []
+            j = i + 1
+            while j < len(parts) and normalize_key(parts[j]) != "scale":
+                expr_tokens.append(parts[j])
+                j += 1
+
+            expr = " ".join(expr_tokens).strip()
             when_any = parse_when_any(expr)
-            break
+            i = j
+            continue
+
         raise ValueError(f"Unknown box option {token!r} in: {text!r}")
 
     if scale <= 0:
@@ -286,38 +306,58 @@ def expand_family_aliases(family: str) -> list[str]:
     return aliases if aliases else [family]
 
 
-def find_font_path_from_families(font_families: list[str]) -> Path | None:
+@lru_cache(maxsize=1)
+def indexed_system_fonts() -> tuple[tuple[str, str], ...]:
     font_dirs = [Path("/System/Library/Fonts"), Path("/Library/Fonts"), Path("~/Library/Fonts").expanduser()]
-    font_files: list[Path] = []
+    indexed: list[tuple[str, str]] = []
+
     for directory in font_dirs:
         if not directory.exists():
             continue
         for path in directory.rglob("*"):
             if path.is_file() and path.suffix.lower() in {".ttf", ".otf", ".ttc"}:
-                font_files.append(path)
+                indexed.append((str(path), normalize_font_token(path.stem)))
 
-    indexed = [(path, normalize_font_token(path.stem)) for path in font_files]
+    return tuple(indexed)
+
+
+@lru_cache(maxsize=128)
+def resolve_font_path_for_families(families_key: tuple[str, ...]) -> str | None:
+    indexed = indexed_system_fonts()
+
     expanded: list[str] = []
-    for fam in font_families:
+    for fam in families_key:
         expanded.extend(expand_family_aliases(fam))
 
     for family in expanded:
         token = normalize_font_token(family)
-        for path, stem in indexed:
+        for path_str, stem in indexed:
             if stem == token:
-                return path
-        for path, stem in indexed:
+                return path_str
+        for path_str, stem in indexed:
             if token and token in stem:
-                return path
+                return path_str
+
     return None
 
 
-def load_font(font_size: int, font_families: list[str]) -> Any:
+def find_font_path_from_families(font_families: list[str]) -> Path | None:
+    families_key = tuple(font_families)
+    resolved = resolve_font_path_for_families(families_key)
+    return Path(resolved) if resolved else None
+
+
+@lru_cache(maxsize=256)
+def load_font_from_path(font_path: str, font_size: int) -> Any:
     image_font = importlib.import_module("PIL.ImageFont")
+    return image_font.truetype(font_path, font_size)
+
+
+def load_font(font_size: int, font_families: list[str]) -> Any:
     resolved = find_font_path_from_families(font_families)
     if resolved is None:
         raise RuntimeError("Could not resolve font from family list: " + ", ".join(font_families))
-    return image_font.truetype(str(resolved), font_size)
+    return load_font_from_path(str(resolved), int(font_size))
 
 
 def exiftool_tags_for_variables(variables: list[str]) -> list[str]:
@@ -368,20 +408,136 @@ def first_nonempty(exif_values: dict[str, str], tags: list[str]) -> str:
     return ""
 
 
-def normalize_capture_date(value: str) -> str:
+def normalize_capture_parts(value: str) -> tuple[str, str, str]:
     if not value:
+        return "", "", ""
+
+    text = value.strip()
+
+    # Common EXIF/ISO forms, with optional timezone and optional AM/PM.
+    # Examples:
+    # - 2024:03:31 18:07:05
+    # - 2024:03:31 18:07:05-07:00
+    # - 2024-03-31T18:07:05Z
+    # - 2024:03:31 6:07:05 PM
+    pattern = re.compile(
+        r"(?P<y>\d{4})[:\-](?P<m>\d{2})[:\-](?P<d>\d{2})"
+        r"(?:[ T])"
+        r"(?P<h>\d{1,2}):(?P<mi>\d{2}):(?P<s>\d{2})"
+        r"(?:\.\d+)?"
+        r"(?:\s*(?P<ampm>AM|PM|am|pm))?"
+        r"(?:\s*(?P<tz>Z|[+\-]\d{2}:?\d{2}))?"
+    )
+
+    m = pattern.search(text)
+    if m:
+        yyyy = m.group("y")
+        mm = m.group("m")
+        dd = m.group("d")
+
+        hour = int(m.group("h"))
+        minute = m.group("mi")
+        second = m.group("s")
+
+        ampm = m.group("ampm")
+        if ampm:
+            ampm_upper = ampm.upper()
+            if ampm_upper == "AM":
+                hour = 0 if hour == 12 else hour
+            elif ampm_upper == "PM":
+                hour = 12 if hour == 12 else hour + 12
+
+        if hour < 0 or hour > 23:
+            return "", "", ""
+
+        date_out = f"{yyyy}-{mm}-{dd}"
+        time_out = f"{hour:02d}:{minute}:{second}"
+
+        tz_raw = (m.group("tz") or "").strip()
+        tz_out = ""
+        if tz_raw:
+            if tz_raw.upper() == "Z":
+                tz_out = "Z"
+            elif len(tz_raw) == 5 and (tz_raw[0] in {"+", "-"}) and tz_raw[1:].isdigit():
+                # Convert -0700 -> -07:00
+                tz_out = f"{tz_raw[0]}{tz_raw[1:3]}:{tz_raw[3:5]}"
+            else:
+                tz_out = tz_raw
+
+        return date_out, time_out, tz_out
+
+    # Fallback: date-only extraction.
+    date_match = re.search(r"(\d{4})[:\-](\d{2})[:\-](\d{2})", text)
+    if date_match:
+        yyyy, mm, dd = date_match.groups()
+        return f"{yyyy}-{mm}-{dd}", "", ""
+
+    return "", "", ""
+
+
+def normalize_timezone_only(value: str) -> str:
+    text = value.strip()
+    if not text:
         return ""
-    if len(value) >= 10 and value[4] in {":", "-"} and value[7] in {":", "-"}:
-        yyyy = value[0:4]
-        mm = value[5:7]
-        dd = value[8:10]
-        if yyyy.isdigit() and mm.isdigit() and dd.isdigit():
-            return f"{yyyy}-{mm}-{dd}"
-    return value
+    if text.upper() == "Z":
+        return "Z"
+
+    m = re.fullmatch(r"([+\-])(\d{2}):?(\d{2})", text)
+    if m:
+        sign, hh, mm = m.groups()
+        return f"{sign}{hh}:{mm}"
+
+    # EXIF TimeZoneOffset can be "-7" or "-7 -7".
+    m2 = re.fullmatch(r"([+\-]?\d{1,2})(?:\s+[+\-]?\d{1,2})?", text)
+    if m2:
+        hour = int(m2.group(1))
+        if -23 <= hour <= 23:
+            return f"{hour:+03d}:00"
+
+    return ""
+
+
+def resolve_capture_components(exif_values: dict[str, str]) -> tuple[str, str, str]:
+    best_date = ""
+    best_time = ""
+    best_tz = ""
+
+    # Prefer the first candidate with both date and time.
+    for tag in CAPTURE_DATETIME_TAGS:
+        raw = exif_values.get(tag, "").strip()
+        if not raw:
+            continue
+        date_out, time_out, tz_out = normalize_capture_parts(raw)
+        if date_out and time_out:
+            best_date, best_time = date_out, time_out
+            best_tz = tz_out
+            break
+        if date_out and not best_date:
+            best_date = date_out
+
+    # If timezone wasn't embedded in datetime value, try dedicated TZ tags.
+    if not best_tz:
+        for tag in CAPTURE_TZ_TAGS:
+            raw_tz = exif_values.get(tag, "").strip()
+            if not raw_tz:
+                continue
+            tz_out = normalize_timezone_only(raw_tz)
+            if tz_out:
+                best_tz = tz_out
+                break
+
+    return best_date, best_time, best_tz
+
+
+def normalize_capture_date(value: str) -> str:
+    date_out, _, _ = normalize_capture_parts(value)
+    return date_out
 
 
 def build_display_metadata(variables: list[str], exif_values: dict[str, str]) -> dict[str, str]:
     display: dict[str, str] = {}
+    capture_date, capture_time, capture_tz = resolve_capture_components(exif_values)
+
     for var in variables:
         if var == "camera":
             make = first_nonempty(exif_values, ["EXIF:Make", "XMP-exif:Make", "XMP-tiff:Make"])
@@ -392,8 +548,21 @@ def build_display_metadata(variables: list[str], exif_values: dict[str, str]) ->
         tags = ATTRIBUTE_TAG_MAP.get(var)
         if tags:
             value = first_nonempty(exif_values, tags)
-            if var == "capture-date":
-                value = normalize_capture_date(value)
+
+            if var in {"capture-date", "capture-time", "capture-datetime", "capture-tz"}:
+                if var == "capture-date":
+                    display[var] = capture_date
+                elif var == "capture-time":
+                    display[var] = capture_time
+                elif var == "capture-tz":
+                    display[var] = capture_tz
+                else:
+                    if capture_date and capture_time:
+                        display[var] = f"{capture_date} {capture_time}{(' ' + capture_tz) if capture_tz else ''}"
+                    else:
+                        display[var] = ""
+                continue
+
             display[var] = value
         else:
             display[var] = ""
@@ -512,18 +681,6 @@ def annotate_v2(input_path: Path, output_path: Path, profile: ProfileV2, diagnos
     emit_diag(diagnostics, f"layout={profile.layout.mode} primary={primary} reason={primary_reason}")
     emit_diag(diagnostics, f"base_font_px={base_font_px} frame_px={frame_px} pad_ext={pad_exterior} pad_int={pad_interior}")
 
-    canvas_w = image_w + 2 * frame_px
-    canvas_h = image_h + 2 * frame_px
-    image_x = frame_px
-    image_y = frame_px
-
-    zones = {
-        ("exterior", "top"): (image_x, 0, image_w, frame_px),
-        ("exterior", "bottom"): (image_x, image_y + image_h, image_w, frame_px),
-        ("interior", "top"): (image_x, image_y, image_w, image_h),
-        ("interior", "bottom"): (image_x, image_y, image_w, image_h),
-    }
-
     variables = collect_variables_from_profile(profile)
     tags = exiftool_tags_for_variables(variables)
     exif_values = run_exiftool_json(input_path, tags)
@@ -534,18 +691,11 @@ def annotate_v2(input_path: Path, output_path: Path, profile: ProfileV2, diagnos
     dummy = image_mod.new("RGB", (max(64, image_w), max(64, image_h)), color="#FFFFFF")
     draw_dummy = draw_mod.Draw(dummy)
 
-    # stack cursors per vertical zone
-    top_cursors: dict[tuple[str, str], int] = {
-        ("exterior", "top"): zones[("exterior", "top")][1],
-        ("interior", "top"): zones[("interior", "top")][1],
-    }
-    bottom_cursors: dict[tuple[str, str], int] = {
-        ("exterior", "bottom"): zones[("exterior", "bottom")][1] + zones[("exterior", "bottom")][3],
-        ("interior", "bottom"): zones[("interior", "bottom")][1] + zones[("interior", "bottom")][3],
-    }
+    measured_boxes: list[dict[str, Any]] = []
+    exterior_top_needed = 0
+    exterior_bottom_needed = 0
 
-    placements: list[BoxLayoutResult] = []
-
+    # First pass: measure renderable boxes and compute exterior gutter requirements.
     for idx, box in enumerate(profile.boxes, start=1):
         if not should_render_box(box, metadata):
             emit_diag(diagnostics, f"box#{idx} skipped by when")
@@ -565,11 +715,10 @@ def annotate_v2(input_path: Path, output_path: Path, profile: ProfileV2, diagnos
             emit_diag(diagnostics, f"box#{idx} has no renderable lines")
             continue
 
-        zone_x, zone_y, zone_w, zone_h = zones[(box.region, box.edge)]
         box_pad = pad_exterior if box.region == "exterior" else pad_interior
-        max_content_w = zone_w - (2 * box_pad)
+        max_content_w = image_w - (2 * box_pad)
         if max_content_w <= 0:
-            raise ValueError(f"Strict overflow: box#{idx} has non-positive content width in zone")
+            raise ValueError(f"Strict overflow: box#{idx} has non-positive content width")
 
         wrapped_lines: list[str] = []
         for line in text_lines_raw:
@@ -590,8 +739,61 @@ def annotate_v2(input_path: Path, output_path: Path, profile: ProfileV2, diagnos
         box_w = content_w + (2 * box_pad)
         box_h = content_h + (2 * box_pad)
 
-        if box_w > zone_w:
-            raise ValueError(f"Strict overflow: box#{idx} width {box_w}px exceeds zone width {zone_w}px")
+        if box_w > image_w:
+            raise ValueError(f"Strict overflow: box#{idx} width {box_w}px exceeds image width {image_w}px")
+
+        color = profile.text_color_exterior if box.region == "exterior" else profile.text_color_interior
+
+        measured_boxes.append(
+            {
+                "idx": idx,
+                "spec": box,
+                "font": font,
+                "lines": wrapped_lines,
+                "line_widths": widths,
+                "line_heights": heights,
+                "line_spacing_px": line_spacing_px,
+                "box_w": box_w,
+                "box_h": box_h,
+                "text_color": color,
+            }
+        )
+
+        if box.region == "exterior":
+            if box.edge == "top":
+                exterior_top_needed = max(exterior_top_needed, box_h)
+            else:
+                exterior_bottom_needed = max(exterior_bottom_needed, box_h)
+
+    top_gutter = max(frame_px, exterior_top_needed)
+    bottom_gutter = max(frame_px, exterior_bottom_needed)
+
+    canvas_w = image_w + 2 * frame_px
+    canvas_h = top_gutter + image_h + bottom_gutter
+    image_x = frame_px
+    image_y = top_gutter
+
+    emit_diag(
+        diagnostics,
+        f"gutters frame_px={frame_px} top_gutter={top_gutter} bottom_gutter={bottom_gutter}",
+    )
+
+    zones = {
+        ("exterior", "top"): (image_x, 0, image_w, top_gutter),
+        ("exterior", "bottom"): (image_x, image_y + image_h, image_w, bottom_gutter),
+        ("interior", "top"): (image_x, image_y, image_w, image_h),
+        ("interior", "bottom"): (image_x, image_y, image_w, image_h),
+    }
+
+    placements: list[BoxLayoutResult] = []
+
+    # Second pass: place measured boxes into resolved zones.
+    # Boxes sharing the same zone/edge always anchor to the same row (no vertical stacking).
+    for measured in measured_boxes:
+        idx = int(measured["idx"])
+        box = measured["spec"]
+        box_w = int(measured["box_w"])
+        box_h = int(measured["box_h"])
 
         if box.align == "left":
             box_x = image_x
@@ -601,37 +803,44 @@ def annotate_v2(input_path: Path, output_path: Path, profile: ProfileV2, diagnos
             box_x = image_x + (image_w - box_w) // 2
 
         key = (box.region, box.edge)
-        if box.edge == "top":
-            box_y = top_cursors[key]
-            if box_y + box_h > zone_y + zone_h:
-                raise ValueError(f"Strict overflow: box#{idx} exceeds top zone height")
-            top_cursors[key] = box_y + box_h
-        else:
-            box_y = bottom_cursors[key] - box_h
-            if box_y < zone_y:
-                raise ValueError(f"Strict overflow: box#{idx} exceeds bottom zone height")
-            bottom_cursors[key] = box_y
+        zone_x, zone_y, zone_w, zone_h = zones[key]
+        _ = zone_x, zone_w
 
-        color = profile.text_color_exterior if box.region == "exterior" else profile.text_color_interior
+        if box_h > zone_h:
+            raise ValueError(f"Strict overflow: box#{idx} exceeds {box.edge} zone height")
+
+        # Zone-specific shared-row anchors:
+        # - exterior/top:    align bottoms (near image edge)
+        # - interior/top:    align tops
+        # - interior/bottom: align bottoms
+        # - exterior/bottom: align tops (near image edge)
+        if key == ("exterior", "top"):
+            box_y = zone_y + zone_h - box_h
+        elif key == ("interior", "top"):
+            box_y = zone_y
+        elif key == ("interior", "bottom"):
+            box_y = zone_y + zone_h - box_h
+        else:  # ("exterior", "bottom")
+            box_y = zone_y
 
         emit_diag(
             diagnostics,
-            f"box#{idx} zone={box.region}/{box.edge}/{box.align} box=({box_x},{box_y},{box_w},{box_h}) lines={len(wrapped_lines)}",
+            f"box#{idx} zone={box.region}/{box.edge}/{box.align} box=({box_x},{box_y},{box_w},{box_h}) lines={len(measured['lines'])}",
         )
 
         placements.append(
             BoxLayoutResult(
                 spec=box,
-                font=font,
+                font=measured["font"],
                 box_x=box_x,
                 box_y=box_y,
                 box_w=box_w,
                 box_h=box_h,
-                lines=wrapped_lines,
-                line_widths=widths,
-                line_heights=heights,
-                line_spacing_px=line_spacing_px,
-                text_color=color,
+                lines=measured["lines"],
+                line_widths=measured["line_widths"],
+                line_heights=measured["line_heights"],
+                line_spacing_px=measured["line_spacing_px"],
+                text_color=measured["text_color"],
             )
         )
 

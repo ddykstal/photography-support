@@ -1,4 +1,4 @@
-# Annotation Profile V2 Specification (Draft)
+# Annotation Profile V2 Specification
 
 This document defines a new profile format for the box-based annotation model.
 
@@ -45,7 +45,7 @@ A V2 profile **must** declare:
 @profile-version 2
 ```
 
-If missing, the parser may reject the file or fall back to V1 parser (implementation choice).
+If missing, the V2 parser rejects the profile.
 
 ---
 
@@ -104,7 +104,8 @@ or
 
 - `@frame-width` is a secondary scale factor based on base font size
   - recommended formula: `frame_px = base_font_px * frame-width`
-  - same width for top/bottom/left/right frame
+  - left/right frame uses this width directly
+  - top/bottom exterior gutters use this as a **minimum** and may expand to fit exterior boxes
 - padding values are multipliers of base font size
   - `exterior_padding_px = base_font_px * exterior-padding`
   - `interior_padding_px = base_font_px * interior-padding`
@@ -153,6 +154,11 @@ Each box has:
 - optional box scale (default `1.0`)
 - optional box-level condition `when any(...)`
 
+Notes:
+
+- `scale` and `when` can appear in either order on the `@box` line.
+- Variable names in text use `$...` (for example `$capture-time`), not `@...`.
+
 Effective font size for a box:
 
 - `box_font_px = base_font_px * box.scale`
@@ -179,6 +185,7 @@ Rules:
 3. Horizontal token also defines text justification inside the box.
 4. Interior boxes draw inside image area with interior padding.
 5. Exterior boxes draw in frame gutters with exterior padding.
+6. Top/bottom exterior gutters auto-expand when needed to fit exterior boxes; they never shrink below `@frame-width`.
 
 ---
 
@@ -186,7 +193,31 @@ Rules:
 
 Inside a box, render lines use the same variable substitution style:
 
-- `$title`, `$caption`, etc.
+- `$identifier`
+- `$title`
+- `$caption`
+- `$copyright`
+- `$license`
+- `$capture-date` (`yyyy-mm-dd`)
+- `$capture-time` (`hh:mm:ss`, 24-hour)
+- `$capture-datetime` (`yyyy-mm-dd hh:mm:ss`, 24-hour; appends timezone like `-07:00` or `Z` when present in metadata)
+- `$capture-tz` (timezone only, e.g. `-07:00`, `+01:00`, or `Z`; empty when unavailable)
+
+Capture timestamp notes:
+
+- Capture values are sourced from EXIF/XMP capture datetime fields.
+- The renderer prefers a source value that contains both date and time.
+- `$capture-time` is always normalized to 24-hour `hh:mm:ss`.
+- `$capture-datetime` includes timezone when available (embedded in capture datetime or from offset tags such as `OffsetTimeOriginal`).
+- `$camera-make`
+- `$camera-model`
+- `$camera`
+- `$iso`
+- `$aperture`
+- `$shutter-speed`
+- `$focal-length`
+- `$lens`
+- `$lens-model`
 
 Optional bracket segments remain supported:
 
@@ -208,8 +239,12 @@ All conditional behavior is box-level (`when any(...)`).
 
 When multiple boxes target the same zone:
 
-- Top zones stack downward in declaration order.
-- Bottom zones stack upward in declaration order.
+- They are anchored to the same row (no vertical stacking).
+- Anchor edge depends on zone:
+  - `exterior top`: align box bottoms (toward the image edge)
+  - `interior top`: align box tops
+  - `interior bottom`: align box bottoms
+  - `exterior bottom`: align box tops (toward the image edge)
 
 Overflow policy in V2:
 
@@ -217,7 +252,7 @@ Overflow policy in V2:
 
 Overlap policy in V2:
 
-- If independently positioned boxes overlap, render all text as positioned (overlap is allowed).
+- If boxes in the same row overlap horizontally, render all text as positioned (overlap is allowed).
 - No automatic deconfliction is performed.
 - Z-order is declaration order (later boxes render on top of earlier boxes).
 
@@ -231,7 +266,7 @@ If omitted:
 - `@font-family`: implementation default (e.g. `Arial, Sans-Serif`)
 - `@font-size`: `1.0` (calibrated baseline; implementation maps this to a reasonable readable size)
 - `@line-spacing`: `0.30`
-- `@frame-width`: `1.0` (always relative to `base_font_px`)
+- `@frame-width`: `1.0` (always relative to `base_font_px`; acts as minimum top/bottom gutter thickness and fixed left/right frame width)
 - `@padding exterior 1.0, interior 1.0`
 - colors:
   - background `#FFFFFF`

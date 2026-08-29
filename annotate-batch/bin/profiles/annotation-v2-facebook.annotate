@@ -6,19 +6,12 @@
 @font-size 1.0
 @line-spacing 0.30
 
-@frame-width 0.0
+@frame-width 3.0
 @padding exterior 1.0, interior 1.0
 
 @background-color #000000
 @text-color exterior #FFFFFF
 @text-color interior #FFFFFF
 
-@box exterior top center
-$title
-
-@box exterior bottom left scale 0.8
+@box interior bottom left when any(copyright,license)
 $copyright
-
-@box exterior bottom center scale 0.8
-[$camera-model][ -- $focal-length][ -- $shutter-speed sec][ -- f/$aperture][ -- ISO $iso]
-$capture-datetime

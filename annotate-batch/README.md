@@ -68,14 +68,12 @@ ANNOTATE_PROFILE=/absolute/path/to/profile.annotate .venv/bin/python annotate-ba
 
 ## Apache/MAMP notes
 
-This app is WSGI-compatible as `application` in `annotate-batch/wsgi.py`.
+Recommended production setup: run the app with Gunicorn and place Apache in front as a reverse proxy.
 
-- For Apache on Debian, use `mod_wsgi` and point to `annotate-batch/wsgi.py`.
-- In MAMP Pro, either proxy to a Python process or use a WSGI setup depending on your stack.
+- Use `annotate-batch/apache-vhost-example.conf` (HTTP) or `annotate-batch/apache-vhost-https-example.conf` (HTTPS) as starting points.
+- These examples proxy dynamic requests to `http://127.0.0.1:5050` and serve `/static` directly from Apache.
 
-You said you'll provide server definitions, so this repo keeps only app code and runtime folders.
-
-## Debian/Linode quick checklist (Apache + mod_wsgi + HTTPS)
+## Debian/Linode quick checklist (Apache reverse proxy + Gunicorn + HTTPS)
 
 Assume project path:
 
@@ -85,7 +83,7 @@ Assume project path:
 
 ```bash
 sudo apt update
-sudo apt install -y apache2 libapache2-mod-wsgi-py3 python3-venv certbot python3-certbot-apache
+sudo apt install -y apache2 python3-venv certbot python3-certbot-apache
 ```
 
 2) Create app venv + install deps:
@@ -99,10 +97,19 @@ python3 -m venv .venv
 3) Enable required Apache modules:
 
 ```bash
-sudo a2enmod wsgi ssl headers rewrite
+sudo a2enmod proxy proxy_http headers ssl rewrite
 ```
 
-4) Install site config:
+4) Start Gunicorn (example):
+
+```bash
+cd /srv/photography-support/annotate-batch
+ANNOTATE_PROFILE=/srv/photography-support/annotate-batch/bin/profiles/annotation-v2-125.annotate \
+ANNOTATE_SESSION_SECRET='replace-with-a-long-random-secret' \
+.venv/bin/gunicorn wsgi:application --bind 127.0.0.1:5050 --workers 2 --threads 4 --timeout 600
+```
+
+5) Install site config:
 
 - Start from `annotate-batch/apache-vhost-https-example.conf`
 - Replace placeholders:
@@ -115,42 +122,41 @@ Then copy to Apache sites dir (example name):
 sudo cp annotate-batch/apache-vhost-https-example.conf /etc/apache2/sites-available/annotate-batch.conf
 ```
 
-5) Enable site + disable default (optional):
+6) Enable site + disable default (optional):
 
 ```bash
 sudo a2ensite annotate-batch.conf
 sudo a2dissite 000-default.conf
 ```
 
-6) Create/verify writable runtime dirs for Apache user (`www-data`):
+7) Create/verify writable runtime dirs for the Gunicorn user:
 
 ```bash
 sudo mkdir -p /srv/photography-support/annotate-batch/uploads
 sudo mkdir -p /srv/photography-support/annotate-batch/annotated
-sudo chown -R www-data:www-data /srv/photography-support/annotate-batch/uploads /srv/photography-support/annotate-batch/annotated
 ```
 
-7) Check Apache config + reload:
+8) Check Apache config + reload:
 
 ```bash
 sudo apache2ctl configtest
 sudo systemctl reload apache2
 ```
 
-8) Issue TLS cert (Let's Encrypt):
+9) Issue TLS cert (Let's Encrypt):
 
 ```bash
 sudo certbot --apache -d blindingmoon.net
 ```
 
-9) Reload after certbot updates vhost:
+10) Reload after certbot updates vhost:
 
 ```bash
 sudo apache2ctl configtest
 sudo systemctl reload apache2
 ```
 
-10) Verify:
+11) Verify:
 
 ```bash
 curl -I http://blindingmoon.net
@@ -161,10 +167,10 @@ Expected:
 - HTTP returns `301` redirect to HTTPS
 - HTTPS returns `200` on `/`
 
-### Optional profile override in Apache
+### Optional profile override
 
-Inside your vhost, set a specific annotation profile:
+Set profile at Gunicorn startup (not in Apache):
 
-```apache
-WSGISetEnv ANNOTATE_PROFILE /srv/photography-support/annotate-batch/bin/profiles/annotation-v2-125.annotate
+```bash
+ANNOTATE_PROFILE=/srv/photography-support/annotate-batch/bin/profiles/annotation-v2-125.annotate
 ```
