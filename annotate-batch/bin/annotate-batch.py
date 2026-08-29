@@ -3,16 +3,20 @@
 import argparse
 import importlib.util
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 
 def load_annotator_module(script_path: Path) -> Any:
-    spec = importlib.util.spec_from_file_location("annotate_border", script_path)
+    module_name = f"{script_path.stem.replace('-', '_')}_dynamic"
+    spec = importlib.util.spec_from_file_location(module_name, script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module from {script_path}")
     module = importlib.util.module_from_spec(spec)
+    # Python 3.14 dataclasses expect the module to be registered while executing.
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 

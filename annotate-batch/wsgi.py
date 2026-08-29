@@ -1,6 +1,6 @@
-"""WSGI entrypoint for Apache mod_wsgi.
+"""WSGI entrypoint for production servers.
 
-Expose Flask app as `application` for mod_wsgi.
+Expose Flask app as `application` for Gunicorn/uWSGI/mod_wsgi.
 """
 
 from app import app as application
