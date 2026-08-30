@@ -15,4 +15,5 @@
 
 @box exterior bottom center scale 0.8
 [$camera-model][ -- $focal-length][ -- $shutter-speed sec][ -- f/$aperture][ -- ISO $iso]
+$location
 $capture-datetime

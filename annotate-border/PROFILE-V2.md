@@ -202,13 +202,7 @@ Inside a box, render lines use the same variable substitution style:
 - `$capture-time` (`hh:mm:ss`, 24-hour)
 - `$capture-datetime` (`yyyy-mm-dd hh:mm:ss`, 24-hour; appends timezone like `-07:00` or `Z` when present in metadata)
 - `$capture-tz` (timezone only, e.g. `-07:00`, `+01:00`, or `Z`; empty when unavailable)
-
-Capture timestamp notes:
-
-- Capture values are sourced from EXIF/XMP capture datetime fields.
-- The renderer prefers a source value that contains both date and time.
-- `$capture-time` is always normalized to 24-hour `hh:mm:ss`.
-- `$capture-datetime` includes timezone when available (embedded in capture datetime or from offset tags such as `OffsetTimeOriginal`).
+- `$location` (reverse-geocoded from GPS coordinates; empty when no coordinates or lookup fails)
 - `$camera-make`
 - `$camera-model`
 - `$camera`
@@ -218,6 +212,18 @@ Capture timestamp notes:
 - `$focal-length`
 - `$lens`
 - `$lens-model`
+
+Capture/location notes:
+
+- Capture values are sourced from EXIF/XMP capture datetime fields.
+- The renderer prefers a source value that contains both date and time.
+- `$capture-time` is always normalized to 24-hour `hh:mm:ss`.
+- `$capture-datetime` includes timezone when available (embedded in capture datetime or from offset tags such as `OffsetTimeOriginal`).
+- `$location` uses reverse geocoding from GPS coordinates and may be blank if coordinates are missing or lookup is unavailable.
+- Set `ANNOTATE_REVERSE_GEOCODE=0` to disable reverse geocoding.
+- Optional provider selector: `ANNOTATE_GEOCODER=nominatim|google|none` (default: `nominatim`).
+- For Google, set `ANNOTATE_GOOGLE_API_KEY` in the runtime environment.
+- Optional timeout override: `ANNOTATE_GEOCODE_TIMEOUT` (seconds).
 
 Optional bracket segments remain supported:
 

@@ -5,10 +5,13 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -25,6 +28,8 @@ BASE_FONT_RATIO = 0.015
 
 CAPTURE_DATETIME_TAGS = ["EXIF:DateTimeOriginal", "XMP-exif:DateTimeOriginal", "XMP-xmp:CreateDate"]
 CAPTURE_TZ_TAGS = ["EXIF:OffsetTimeOriginal", "XMP-exif:OffsetTimeOriginal", "EXIF:TimeZoneOffset"]
+GPS_LAT_TAGS = ["EXIF:GPSLatitude", "XMP-exif:GPSLatitude", "Composite:GPSLatitude"]
+GPS_LON_TAGS = ["EXIF:GPSLongitude", "XMP-exif:GPSLongitude", "Composite:GPSLongitude"]
 
 
 ATTRIBUTE_TAG_MAP: dict[str, list[str]] = {
@@ -37,6 +42,7 @@ ATTRIBUTE_TAG_MAP: dict[str, list[str]] = {
     "capture-time": [*CAPTURE_DATETIME_TAGS, *CAPTURE_TZ_TAGS],
     "capture-datetime": [*CAPTURE_DATETIME_TAGS, *CAPTURE_TZ_TAGS],
     "capture-tz": [*CAPTURE_DATETIME_TAGS, *CAPTURE_TZ_TAGS],
+    "location": [*GPS_LAT_TAGS, *GPS_LON_TAGS],
     "camera-make": ["EXIF:Make", "XMP-exif:Make", "XMP-tiff:Make"],
     "camera-model": ["EXIF:Model", "EXIF:CameraModelName", "XMP-exif:Model", "XMP-tiff:Model"],
     "camera": [
@@ -534,15 +540,283 @@ def normalize_capture_date(value: str) -> str:
     return date_out
 
 
+def parse_gps_coordinate(raw_value: str, *, is_latitude: bool) -> float | None:
+    text = raw_value.strip()
+    if not text:
+        return None
+
+    # Decimal degree fast-path.
+    try:
+        value = float(text)
+        if is_latitude and -90.0 <= value <= 90.0:
+            return value
+        if (not is_latitude) and -180.0 <= value <= 180.0:
+            return value
+    except ValueError:
+        pass
+
+    nums = [float(n) for n in re.findall(r"[-+]?\d+(?:\.\d+)?", text)]
+    if not nums:
+        return None
+
+    deg = abs(nums[0])
+    minute = nums[1] if len(nums) >= 2 else 0.0
+    second = nums[2] if len(nums) >= 3 else 0.0
+    value = deg + (minute / 60.0) + (second / 3600.0)
+
+    # Sign from explicit degree sign or hemisphere suffix.
+    if nums[0] < 0:
+        value = -value
+
+    hemi_match = re.search(r"\b([NSEW])\b", text, flags=re.IGNORECASE)
+    if hemi_match:
+        hemi = hemi_match.group(1).upper()
+        if hemi in {"S", "W"}:
+            value = -abs(value)
+        else:
+            value = abs(value)
+
+    if is_latitude and not (-90.0 <= value <= 90.0):
+        return None
+    if (not is_latitude) and not (-180.0 <= value <= 180.0):
+        return None
+
+    return value
+
+
+def resolve_gps_coordinates(exif_values: dict[str, str]) -> tuple[float, float] | None:
+    lat: float | None = None
+    lon: float | None = None
+
+    for tag in GPS_LAT_TAGS:
+        raw = exif_values.get(tag, "").strip()
+        if not raw:
+            continue
+        parsed = parse_gps_coordinate(raw, is_latitude=True)
+        if parsed is not None:
+            lat = parsed
+            break
+
+    for tag in GPS_LON_TAGS:
+        raw = exif_values.get(tag, "").strip()
+        if not raw:
+            continue
+        parsed = parse_gps_coordinate(raw, is_latitude=False)
+        if parsed is not None:
+            lon = parsed
+            break
+
+    if lat is None or lon is None:
+        return None
+    return lat, lon
+
+
+def reverse_geocode_enabled() -> bool:
+    raw = os.environ.get("ANNOTATE_REVERSE_GEOCODE", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def geocode_timeout_seconds() -> float:
+    timeout = 2.0
+    timeout_raw = os.environ.get("ANNOTATE_GEOCODE_TIMEOUT", "").strip()
+    if timeout_raw:
+        try:
+            timeout = max(0.2, float(timeout_raw))
+        except ValueError:
+            timeout = 2.0
+    return timeout
+
+
+def geocoder_provider() -> str:
+    provider = os.environ.get("ANNOTATE_GEOCODER", "nominatim").strip().lower()
+    if provider in {"", "default"}:
+        return "nominatim"
+    if provider in {"none", "off", "disabled"}:
+        return "none"
+    if provider in {"google", "nominatim"}:
+        return provider
+    return "nominatim"
+
+
+def fetch_json(url: str, *, timeout: float) -> dict[str, Any] | None:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "annotate-border-v2/1.0",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+@lru_cache(maxsize=1024)
+def reverse_geocode_nominatim(lat_rounded: float, lon_rounded: float) -> str:
+    params = {
+        "lat": f"{lat_rounded:.6f}",
+        "lon": f"{lon_rounded:.6f}",
+        "format": "jsonv2",
+        "addressdetails": "1",
+        "zoom": "12",
+    }
+    url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(params)
+    payload = fetch_json(url, timeout=geocode_timeout_seconds())
+    if payload is None:
+        return ""
+
+    address = payload.get("address", {})
+    if not isinstance(address, dict):
+        address = {}
+
+    city = (
+        address.get("city")
+        or address.get("town")
+        or address.get("village")
+        or address.get("hamlet")
+        or address.get("municipality")
+        or address.get("county")
+    )
+    state = address.get("state") or address.get("state_district") or address.get("region")
+    country = address.get("country")
+
+    parts: list[str] = []
+    for part in [city, state, country]:
+        text = str(part).strip() if part else ""
+        if text and text not in parts:
+            parts.append(text)
+
+    if parts:
+        return ", ".join(parts)
+
+    display_name = payload.get("display_name")
+    if isinstance(display_name, str):
+        return display_name.strip()
+
+    return ""
+
+
+def format_google_result(result: dict[str, Any]) -> str:
+    formatted = result.get("formatted_address")
+    if isinstance(formatted, str) and formatted.strip():
+        return formatted.strip()
+
+    components = result.get("address_components", [])
+    if not isinstance(components, list):
+        return ""
+
+    by_type: dict[str, str] = {}
+    for comp in components:
+        if not isinstance(comp, dict):
+            continue
+        name = comp.get("long_name")
+        types = comp.get("types", [])
+        if not isinstance(name, str) or not isinstance(types, list):
+            continue
+        for t in types:
+            if isinstance(t, str) and t not in by_type:
+                by_type[t] = name.strip()
+
+    city = by_type.get("locality") or by_type.get("postal_town") or by_type.get("administrative_area_level_2")
+    state = by_type.get("administrative_area_level_1")
+    country = by_type.get("country")
+
+    parts: list[str] = []
+    for part in [city, state, country]:
+        if part and part not in parts:
+            parts.append(part)
+    return ", ".join(parts)
+
+
+@lru_cache(maxsize=1024)
+def reverse_geocode_google(lat_rounded: float, lon_rounded: float, api_key: str) -> str:
+    params = {
+        "latlng": f"{lat_rounded:.6f},{lon_rounded:.6f}",
+        "key": api_key,
+    }
+    url = "https://maps.googleapis.com/maps/api/geocode/json?" + urllib.parse.urlencode(params)
+    payload = fetch_json(url, timeout=geocode_timeout_seconds())
+    if payload is None:
+        return ""
+
+    status = str(payload.get("status", ""))
+    if status != "OK":
+        return ""
+
+    results = payload.get("results", [])
+    if not isinstance(results, list):
+        return ""
+
+    # Prefer landmark-ish result types when available.
+    preferred_types = {
+        "point_of_interest",
+        "establishment",
+        "premise",
+        "tourist_attraction",
+        "park",
+        "church",
+        "place_of_worship",
+        "natural_feature",
+    }
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        types = result.get("types", [])
+        if isinstance(types, list) and any((isinstance(t, str) and t in preferred_types) for t in types):
+            text = format_google_result(result)
+            if text:
+                return text
+
+    for result in results:
+        if isinstance(result, dict):
+            text = format_google_result(result)
+            if text:
+                return text
+
+    return ""
+
+
+def reverse_geocode_location(lat_rounded: float, lon_rounded: float) -> str:
+    provider = geocoder_provider()
+    if provider == "none":
+        return ""
+
+    if provider == "google":
+        api_key = os.environ.get("ANNOTATE_GOOGLE_API_KEY", "").strip()
+        if not api_key:
+            return ""
+        return reverse_geocode_google(lat_rounded, lon_rounded, api_key)
+
+    return reverse_geocode_nominatim(lat_rounded, lon_rounded)
+
+
 def build_display_metadata(variables: list[str], exif_values: dict[str, str]) -> dict[str, str]:
     display: dict[str, str] = {}
     capture_date, capture_time, capture_tz = resolve_capture_components(exif_values)
+
+    location_value = ""
+    if "location" in variables and reverse_geocode_enabled():
+        coords = resolve_gps_coordinates(exif_values)
+        if coords is not None:
+            lat, lon = coords
+            location_value = reverse_geocode_location(round(lat, 6), round(lon, 6))
 
     for var in variables:
         if var == "camera":
             make = first_nonempty(exif_values, ["EXIF:Make", "XMP-exif:Make", "XMP-tiff:Make"])
             model = first_nonempty(exif_values, ["EXIF:Model", "EXIF:CameraModelName", "XMP-exif:Model", "XMP-tiff:Model"])
             display[var] = " ".join(x for x in [make, model] if x).strip()
+            continue
+
+        if var == "location":
+            display[var] = location_value
             continue
 
         tags = ATTRIBUTE_TAG_MAP.get(var)
