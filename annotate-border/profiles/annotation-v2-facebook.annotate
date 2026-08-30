@@ -1,12 +1,12 @@
 # V2 box-model profile
 @profile-version 2
-@layout projection 16:9
+@layout projection 4:3
 
 @font-family American Typewriter, Courier New, Monospace
-@font-size 1.0
+@font-size 1.5
 @line-spacing 0.30
 
-@frame-width 3.0
+@frame-width 0.5
 @padding exterior 1.0, interior 1.0
 
 @background-color #000000

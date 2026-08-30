@@ -13,12 +13,6 @@
 @text-color exterior #FFFFFF
 @text-color interior #FFFFFF
 
-@box exterior top center
-$title
-
-@box exterior bottom left scale 0.8
-$copyright
-
 @box exterior bottom center scale 0.8
 [$camera-model][ -- $focal-length][ -- $shutter-speed sec][ -- f/$aperture][ -- ISO $iso]
 $capture-datetime
